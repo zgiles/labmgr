@@ -1,0 +1,197 @@
+# Lab Manager Configuration Example
+# This file demonstrates all configuration options and device types supported
+
+servers:
+  # Example 1: IPMI + PDU Device (Full Control)
+  # This is the most common configuration for rack servers
+  - id: "server-01"
+    name: "Web Server 1"
+    description: "Production web server with IPMI and power outlets"
+    ipmi:
+      host: "192.168.1.100"
+      username: "admin"
+      password: "password123"
+    pdu_outlets: 
+      - "pdu1:1"    # Primary power supply
+      - "pdu1:2"    # Secondary power supply (dual PSU)
+    metadata:
+      hostname: "web1.lab.local"
+      role: "webserver"
+      datacenter: "rack-a"
+      mac: "aa:bb:cc:dd:ee:01"
+      location: "U10-U12"
+
+  # Example 2: IPMI-Only Device (BMC Control Only)
+  # For servers without centralized power distribution
+  - id: "server-02"
+    name: "Development Server"
+    description: "Dev server with IPMI only"
+    ipmi:
+      host: "192.168.1.101"
+      username: "admin"
+      password: "password123"
+    # No pdu_outlets defined - IPMI control only
+    metadata:
+      hostname: "dev1.lab.local"
+      role: "development"
+      mac: "aa:bb:cc:dd:ee:02"
+
+  # Example 3: PDU-Only Device (Power Control Only)  
+  # For network equipment, storage appliances, etc.
+  - id: "switch-01"
+    name: "Core Network Switch"
+    description: "48-port managed switch"
+    ipmi:
+      host: ""        # Empty - no IPMI interface
+      username: ""
+      password: ""
+    pdu_outlets:
+      - "pdu1:8"      # Single power supply
+    metadata:
+      hostname: "core-sw1"
+      role: "network"
+      model: "cisco-2960"
+
+  # Example 4: Complex Server with Multiple PDUs
+  - id: "db-01"
+    name: "Database Server"
+    description: "High-availability database server"
+    ipmi:
+      host: "192.168.1.103"
+      username: "root"
+      password: "secretpassword"
+    pdu_outlets:
+      - "pdu1:10"     # PSU1 on PDU1
+      - "pdu2:5"      # PSU2 on PDU2 (different PDU for redundancy)
+    metadata:
+      hostname: "db1.lab.local"
+      role: "database"
+      criticality: "high"
+      mac: "aa:bb:cc:dd:ee:03"
+
+  # Example 5: Server with Custom iPXE Chain Loading
+  - id: "nixos-01"
+    name: "NixOS Development Server"
+    description: "NixOS server with custom netboot"
+    ipmi:
+      host: "192.168.1.104"
+      username: "admin"
+      password: "password"
+    pdu_outlets: ["pdu1:11"]
+    metadata:
+      hostname: "nixos-dev1"
+      role: "development"
+      mac: "aa:bb:cc:dd:ee:04"
+      # Chain load to NixOS netboot with templated parameters
+      next-path: "http://netboot.nixos.org/ipxe?hostname={{.Hostname}}&mac={{.MAC}}&role={{.Role}}"
+
+  # Example 6: Server with Custom Boot Template
+  - id: "ubuntu-01" 
+    name: "Ubuntu Autoinstall Server"
+    description: "Ubuntu server with custom autoinstall"
+    ipmi:
+      host: "192.168.1.105"
+      username: "admin" 
+      password: "password"
+    pdu_outlets: ["pdu1:12"]
+    metadata:
+      hostname: "ubuntu1"
+      role: "webserver"
+      mac: "aa:bb:cc:dd:ee:05"
+      ubuntu_version: "22.04"
+      # Custom boot template with full control
+      boot-template: |
+        #!ipxe
+        
+        echo Lab Manager - Custom Ubuntu Boot
+        echo Hostname: {{.Hostname}}
+        echo MAC: {{.MAC}}
+        echo Incoming IP: {{.IncomingServerIP}}
+        echo Ubuntu Version: {{.Metadata.ubuntu_version}}
+        
+        # Set network configuration
+        set hostname {{.Hostname}}
+        set net0/ip {{.IncomingServerIP}}
+        
+        # Boot Ubuntu autoinstall
+        kernel http://archive.ubuntu.com/ubuntu/dists/jammy/main/installer-amd64/current/legacy-images/netboot/ubuntu-installer/amd64/linux
+        initrd http://archive.ubuntu.com/ubuntu/dists/jammy/main/installer-amd64/current/legacy-images/netboot/ubuntu-installer/amd64/initrd.gz
+        imgargs linux auto=true hostname={{.Hostname}} preseed/url=http://lab.example.com/preseed/{{.Role}}.cfg
+        boot
+
+# PDU Configuration Examples
+pdus:
+  # APC PDU via SNMP (Most Common)
+  - id: "pdu1"
+    name: "Rack A Main PDU"
+    host: "192.168.1.200"
+    username: "apc"              # HTTP username (if web interface enabled)
+    password: "apc"              # HTTP password
+    type: "apc"                  # Uses SNMP protocol
+    snmp_community: "private"    # SNMP write community string
+    snmp_version: "v2c"          # SNMP version: v1, v2c, or v3
+    snmp_port: 161               # SNMP port (default: 161)
+
+  # Secondary PDU for redundancy
+  - id: "pdu2" 
+    name: "Rack A Secondary PDU"
+    host: "192.168.1.201"
+    username: "apc"
+    password: "apc"
+    type: "apc"
+    snmp_community: "private"
+    snmp_version: "v2c"
+    snmp_port: 161
+
+  # Generic HTTP-based PDU (Less Common)
+  - id: "pdu3"
+    name: "Generic HTTP PDU"
+    host: "192.168.1.202"
+    username: "admin"
+    password: "password"
+    type: "generic"              # Uses HTTP API instead of SNMP
+    # No SNMP settings for generic type
+
+# Timing Configuration
+# These delays prevent equipment damage and ensure proper sequencing
+delays:
+  # Time to wait from PDU power-on to IPMI power-on command
+  # Allows PSUs to stabilize before BMC operations
+  pdu_to_power_on_seconds: 120
+
+  # Time to wait from IPMI power-off to PDU power-off
+  # Ensures clean OS shutdown before cutting power
+  power_off_to_pdu_seconds: 30
+
+  # Delay between consecutive IPMI commands
+  # Prevents overwhelming BMC interfaces
+  between_ipmi_seconds: 5
+
+  # Delay between PDU outlet operations
+  # Prevents power surge issues and SNMP overload
+  between_pdu_seconds: 2
+
+# Additional Configuration Notes:
+#
+# 1. Server IDs must be unique across all servers
+# 2. PDU outlet format: "pdu-id:outlet-number" (e.g., "pdu1:5")
+# 3. Multiple outlets per server are supported for dual-PSU configurations
+# 4. Metadata fields are optional but recommended for iPXE and organization
+# 5. Empty IPMI fields (host: "") indicate PDU-only devices
+# 6. Missing pdu_outlets indicates IPMI-only devices
+#
+# 7. Security Considerations:
+#    - Use strong passwords for IPMI and PDU access
+#    - Limit SNMP community strings to necessary hosts
+#    - Consider using SNMP v3 for encryption if supported
+#    - Protect this configuration file (contains passwords)
+#
+# 8. Network Requirements:
+#    - IPMI typically uses port 623/UDP
+#    - SNMP uses port 161/UDP (and 162 for traps)
+#    - Ensure firewall rules allow these protocols
+#
+# 9. Testing Configuration:
+#    - Start with debug mode: ./labmgr -debug -config this-file.yaml
+#    - Test individual devices before adding to production
+#    - Monitor logs for SNMP timeout or IPMI connection issues
