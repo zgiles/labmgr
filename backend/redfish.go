@@ -29,9 +29,30 @@ func (b *redfishBMC) connect(ctx context.Context) (*gofish.APIClient, error) {
 		BasicAuth: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("connect to BMC %s: %w", b.config.Host, err)
+		return nil, friendlyError(err)
 	}
 	return c, nil
+}
+
+// friendlyError turns common transport and auth failures into short, plain explanations
+func friendlyError(err error) error {
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "no route to host"):
+		return fmt.Errorf("no route to host (is it plugged in and on the network?)")
+	case strings.Contains(lower, "connection refused"):
+		return fmt.Errorf("connection refused (BMC web service down or still booting)")
+	case strings.Contains(lower, "i/o timeout"), strings.Contains(lower, "deadline exceeded"), strings.Contains(lower, "timeout awaiting"):
+		return fmt.Errorf("timed out waiting for the BMC")
+	case strings.Contains(lower, "401"), strings.Contains(lower, "unauthorized"):
+		return fmt.Errorf("login rejected (check the BMC username and password)")
+	case strings.Contains(lower, "no such host"):
+		return fmt.Errorf("BMC hostname doesn't resolve")
+	case strings.Contains(lower, "network is unreachable"):
+		return fmt.Errorf("network unreachable from Lab Manager")
+	}
+	return err
 }
 
 func (b *redfishBMC) withSystem(ctx context.Context, fn func(*gofish.APIClient, *schemas.ComputerSystem) error) error {

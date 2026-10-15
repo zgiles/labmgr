@@ -1,25 +1,28 @@
-.PHONY: build run dev clean install build-static
+.PHONY: build run dev clean install build-static test
 
 # Build everything with embedded assets
 build: build-frontend build-backend
 
-# Build frontend
+# Build frontend (typechecks, then bundles)
 build-frontend:
-	cd frontend && npm install && npm run build
+	cd frontend && npm ci && npm run build
 
 # Build backend with embedded assets
 build-backend: build-frontend
 	rm -rf backend/static
 	cp -r frontend/dist backend/static
-	cd backend && go mod tidy
 	cd backend && CGO_ENABLED=0 go build -ldflags="-w -s" -o ../labmgr .
 
 # Build static binary (same as build, but explicit)
 build-static: build-frontend
 	rm -rf backend/static
 	cp -r frontend/dist backend/static
-	cd backend && go mod tidy
 	cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o ../labmgr-linux-amd64 .
+
+# Backend tests (fake hardware; nothing touches real machines) and frontend typecheck
+test:
+	cd backend && go vet ./... && go test -race ./...
+	cd frontend && npm run typecheck
 
 # Run in development mode (no embedded assets)
 dev:
