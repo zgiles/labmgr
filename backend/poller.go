@@ -1,467 +1,258 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"log"
-	"strconv"
-	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	ReachableInterval   = 30 * time.Second  // Poll reachable servers every 30s (reduced from 15s)
-	UnreachableInterval = 120 * time.Second // Poll unreachable servers every 2 minutes (reduced from 60s)
+	pollReachable   = 30 * time.Second // BMC/PDU answering
+	pollUnreachable = 90 * time.Second // BMC/PDU not answering
+	pollFast        = 5 * time.Second  // while an operation is running on the server
+	bmcPollTimeout  = 10 * time.Second
+	pduPollTimeout  = 10 * time.Second
 )
 
-func startStatusPoller() {
-	log.Println("Starting background status poller...")
-	
-	go func() {
-		// Initial poll of all servers
-		pollAllServers()
-		
-		// Set up ticker for regular polling
-		ticker := time.NewTicker(15 * time.Second) // Check every 15 seconds which servers need polling (reduced frequency)
-		defer ticker.Stop()
-		
-		for range ticker.C {
-			pollServersIfNeeded()
+// Poller keeps the state store fresh. Each BMC and each PDU is polled on its own
+// schedule, never more than once at a time; a PDU is read with one query for all its outlets.
+type Poller struct {
+	config *ConfigStore
+	hw     Hardware
+	state  *StateStore
+
+	mu       sync.Mutex
+	inflight map[string]bool
+	next     map[string]time.Time // "bmc:<server>" / "pdu:<pdu>" -> next poll
+	fast     map[string]time.Time // server -> fast polling until
+}
+
+func NewPoller(config *ConfigStore, hw Hardware, state *StateStore) *Poller {
+	return &Poller{
+		config:   config,
+		hw:       hw,
+		state:    state,
+		inflight: make(map[string]bool),
+		next:     make(map[string]time.Time),
+		fast:     make(map[string]time.Time),
+	}
+}
+
+func (p *Poller) Run(ctx context.Context) {
+	log.Println("Starting status poller")
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		p.tick(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
+	}
+}
+
+func (p *Poller) tick(ctx context.Context) {
+	config := p.config.Get()
+	now := time.Now()
+
+	pdusInUse := make(map[string]bool)
+	for i := range config.Servers {
+		server := &config.Servers[i]
+		if server.HasBMC() {
+			id := server.ID
+			p.dispatch(ctx, "bmc:"+id, now, func(ctx context.Context) bool { return p.pollBMC(ctx, config, id) })
+		}
+		for _, ref := range server.Outlets() {
+			pdusInUse[ref.PDUID] = true
+		}
+	}
+	for pduID := range pdusInUse {
+		id := pduID
+		p.dispatch(ctx, "pdu:"+id, now, func(ctx context.Context) bool { return p.pollPDU(ctx, config, id) })
+	}
+}
+
+// dispatch starts a poll if it's due and not already running; poll returns whether the device answered
+func (p *Poller) dispatch(ctx context.Context, key string, now time.Time, poll func(context.Context) bool) {
+	p.mu.Lock()
+	if p.inflight[key] || now.Before(p.next[key]) {
+		p.mu.Unlock()
+		return
+	}
+	p.inflight[key] = true
+	p.mu.Unlock()
+
+	go func() {
+		ok := poll(ctx)
+		interval := pollUnreachable
+		if ok {
+			interval = pollReachable
+		}
+		if p.isFast(key) {
+			interval = pollFast
+		}
+		p.mu.Lock()
+		p.inflight[key] = false
+		p.next[key] = time.Now().Add(interval)
+		p.mu.Unlock()
 	}()
 }
 
-func pollAllServers() {
-	config, err := loadConfig()
-	if err != nil {
-		log.Printf("Error loading config for polling: %v", err)
-		return
-	}
-	
-	// Use bulk PDU polling to reduce SNMP load
-	go bulkPollPDUs(config)
-	
-	// Poll IPMI systems individually (still parallel)
-	for _, server := range config.Servers {
-		go pollServerIPMI(server.ID)
-	}
-}
-
-func pollServersIfNeeded() {
-	config, err := loadConfig()
-	if err != nil {
-		log.Printf("Error loading config for polling: %v", err)
-		return
-	}
-	
+// isFast reports whether a poll key belongs to a server (or a PDU feeding a server) in fast mode
+func (p *Poller) isFast(key string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	now := time.Now()
-	
-	// Collect servers that need PDU polling, grouped by PDU
-	pduServersToCheck := make(map[string][]string) // pduID -> serverIDs
-	
-	for _, server := range config.Servers {
-		cachedStatus, exists := cache.Get(server.ID)
-		
-		var shouldPoll bool
-		if !exists {
-			// Never polled before
-			shouldPoll = true
-		} else {
-			var interval time.Duration
-			if cachedStatus.IsReachable {
-				interval = ReachableInterval
-			} else {
-				interval = UnreachableInterval
-			}
-			
-			shouldPoll = now.Sub(cachedStatus.LastChecked) >= interval
-		}
-		
-		if shouldPoll {
-			// Poll IPMI individually
-			go pollServerIPMI(server.ID)
-			
-			// Group PDU polling by PDU ID
-			for _, outlet := range server.PDUOutlets {
-				parts := strings.Split(outlet, ":")
-				if len(parts) == 2 {
-					pduID := parts[0]
-					pduServersToCheck[pduID] = append(pduServersToCheck[pduID], server.ID)
-				}
-			}
-		}
-	}
-	
-	// Bulk poll PDUs that need checking
-	for pduID, serverIDs := range pduServersToCheck {
-		go bulkPollPDUByID(config, pduID, serverIDs)
-	}
-}
-
-func pollServer(serverID string) {
-	log.Printf("Polling server %s", serverID)
-	
-	systemStatus, powerStatus, err := getDeviceStatusDual(serverID)
-	
-	// Determine overall reachability - device is reachable if either system or power is reachable
-	isReachable := (systemStatus != "unreachable" && systemStatus != "no_ipmi") || 
-	              (powerStatus != "unreachable" && powerStatus != "no_pdu")
-	
-	if err != nil {
-		log.Printf("Error polling server %s: %v", serverID, err)
-		// Don't immediately mark as unreachable - individual status checks handle their own errors
-		// Only mark as unreachable if BOTH IPMI and PDU fail
-		cache.UpdateDualStatus(serverID, systemStatus, powerStatus, isReachable, err)
-	} else {
-		// Create a descriptive status message for logging
-		var logStatus string
-		if systemStatus != "unreachable" && systemStatus != "no_ipmi" && powerStatus != "unreachable" && powerStatus != "no_pdu" {
-			logStatus = fmt.Sprintf("system:%s, power:%s", systemStatus, powerStatus)
-		} else if systemStatus != "unreachable" && systemStatus != "no_ipmi" {
-			logStatus = fmt.Sprintf("system:%s (no PDU)", systemStatus)
-		} else if powerStatus != "unreachable" && powerStatus != "no_pdu" {
-			logStatus = fmt.Sprintf("power:%s (no IPMI)", powerStatus)
-		} else {
-			logStatus = "unreachable"
-		}
-		
-		log.Printf("Server %s status: %s (reachable: %v)", serverID, logStatus, isReachable)
-		cache.UpdateDualStatus(serverID, systemStatus, powerStatus, isReachable, nil)
-	}
-}
-
-// pollServerIPMI polls only the IPMI status of a server
-func pollServerIPMI(serverID string) {
-	config, err := loadConfig()
-	if err != nil {
-		log.Printf("Error loading config for IPMI polling: %v", err)
-		return
-	}
-
-	var server *Server
-	for _, s := range config.Servers {
-		if s.ID == serverID {
-			server = &s
-			break
-		}
-	}
-
-	if server == nil || server.IPMI.Host == "" {
-		return // No IPMI to poll
-	}
-
-	systemStatus, err := getIPMIStatusInternal(serverID)
-	if err != nil {
-		systemStatus = "unreachable"
-	}
-
-	// Update cache with IPMI status only
-	// The PDU status will be updated separately by bulk polling
-	cachedStatus, exists := cache.Get(serverID)
-	if exists {
-		cache.UpdateDualStatus(serverID, systemStatus, cachedStatus.PowerStatus, 
-			(systemStatus != "unreachable" && systemStatus != "no_ipmi") || 
-			(cachedStatus.PowerStatus != "unreachable" && cachedStatus.PowerStatus != "no_pdu"), nil)
-	} else {
-		// First time - assume no PDU for now, bulk polling will update
-		cache.UpdateDualStatus(serverID, systemStatus, "no_pdu", 
-			systemStatus != "unreachable" && systemStatus != "no_ipmi", nil)
-	}
-}
-
-// bulkPollPDUs polls all PDUs with bulk SNMP queries
-func bulkPollPDUs(config *Config) {
-	// Group outlets by PDU
-	pduOutlets := make(map[string][]int)
-	pduServerMap := make(map[string][]string) // pduID:outlet -> serverIDs
-
-	for _, server := range config.Servers {
-		for _, outlet := range server.PDUOutlets {
-			parts := strings.Split(outlet, ":")
-			if len(parts) == 2 {
-				pduID := parts[0]
-				outletNum, err := strconv.Atoi(parts[1])
-				if err != nil {
-					continue
-				}
-				
-				pduOutlets[pduID] = append(pduOutlets[pduID], outletNum)
-				key := fmt.Sprintf("%s:%d", pduID, outletNum)
-				pduServerMap[key] = append(pduServerMap[key], server.ID)
-			}
-		}
-	}
-
-	// Bulk query each PDU
-	for pduID, outlets := range pduOutlets {
-		go bulkQueryPDU(config, pduID, outlets, pduServerMap)
-	}
-}
-
-// bulkPollPDUByID polls a specific PDU for specific servers
-func bulkPollPDUByID(config *Config, pduID string, serverIDs []string) {
-	// Collect outlets to check for this PDU
-	outlets := make([]int, 0)
-	pduServerMap := make(map[string][]string)
-
-	for _, serverID := range serverIDs {
-		var server *Server
-		for _, s := range config.Servers {
-			if s.ID == serverID {
-				server = &s
-				break
-			}
-		}
-		
-		if server == nil {
+	config := p.config.Get()
+	for serverID, until := range p.fast {
+		if now.After(until) {
+			delete(p.fast, serverID)
 			continue
 		}
-
-		for _, outlet := range server.PDUOutlets {
-			parts := strings.Split(outlet, ":")
-			if len(parts) == 2 && parts[0] == pduID {
-				outletNum, err := strconv.Atoi(parts[1])
-				if err != nil {
-					continue
+		if key == "bmc:"+serverID {
+			return true
+		}
+		if server := config.Server(serverID); server != nil {
+			for _, ref := range server.Outlets() {
+				if key == "pdu:"+ref.PDUID {
+					return true
 				}
-				
-				outlets = append(outlets, outletNum)
-				key := fmt.Sprintf("%s:%d", pduID, outletNum)
-				pduServerMap[key] = append(pduServerMap[key], serverID)
 			}
 		}
 	}
-
-	if len(outlets) > 0 {
-		bulkQueryPDU(config, pduID, outlets, pduServerMap)
-	}
+	return false
 }
 
-// bulkQueryPDU performs the actual bulk SNMP query
-func bulkQueryPDU(config *Config, pduID string, outlets []int, pduServerMap map[string][]string) {
-	// Find PDU configuration
-	var pdu *PDU
-	for _, p := range config.PDUs {
-		if p.ID == pduID {
-			pdu = &p
-			break
-		}
+// Boost polls a server quickly for a while, e.g. during and just after an operation
+func (p *Poller) Boost(serverID string, d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	until := time.Now().Add(d)
+	if until.After(p.fast[serverID]) {
+		p.fast[serverID] = until
 	}
-
-	if pdu == nil {
-		log.Printf("PDU %s not found in config", pduID)
-		return
+	// Pull the next polls in
+	now := time.Now()
+	if t, ok := p.next["bmc:"+serverID]; ok && t.After(now.Add(pollFast)) {
+		p.next["bmc:"+serverID] = now
 	}
-
-	// Remove duplicates from outlets
-	uniqueOutlets := make([]int, 0)
-	seen := make(map[int]bool)
-	for _, outlet := range outlets {
-		if !seen[outlet] {
-			uniqueOutlets = append(uniqueOutlets, outlet)
-			seen[outlet] = true
-		}
-	}
-
-	log.Printf("Bulk polling PDU %s for outlets %v", pduID, uniqueOutlets)
-
-	// Use the new bulk PDU status function
-	outletStatuses, err := getBulkPDUStatus(pdu, uniqueOutlets)
-	if err != nil {
-		log.Printf("Failed to bulk poll PDU %s: %v", pduID, err)
-		
-		// Mark all servers using this PDU as having unreachable power status
-		for _, outlet := range uniqueOutlets {
-			key := fmt.Sprintf("%s:%d", pduID, outlet)
-			for _, serverID := range pduServerMap[key] {
-				cachedStatus, exists := cache.Get(serverID)
-				systemStatus := "no_ipmi"
-				if exists {
-					systemStatus = cachedStatus.SystemStatus
-				}
-				
-				cache.UpdateDualStatus(serverID, systemStatus, "unreachable", 
-					systemStatus != "unreachable" && systemStatus != "no_ipmi", err)
+	if server := p.config.Get().Server(serverID); server != nil {
+		for _, ref := range server.Outlets() {
+			if t, ok := p.next["pdu:"+ref.PDUID]; ok && t.After(now.Add(pollFast)) {
+				p.next["pdu:"+ref.PDUID] = now
 			}
 		}
-		return
 	}
-
-	// Update status for each server
-	for outlet, status := range outletStatuses {
-		key := fmt.Sprintf("%s:%d", pduID, outlet)
-		for _, serverID := range pduServerMap[key] {
-			cachedStatus, exists := cache.Get(serverID)
-			systemStatus := "no_ipmi"
-			if exists {
-				systemStatus = cachedStatus.SystemStatus
-			}
-
-			// Determine overall reachability
-			isReachable := (systemStatus != "unreachable" && systemStatus != "no_ipmi") || 
-						 (status != "unreachable" && status != "no_pdu")
-
-			cache.UpdateDualStatus(serverID, systemStatus, status, isReachable, nil)
-		}
-	}
-
-	log.Printf("Successfully bulk polled PDU %s: %d outlets updated", pduID, len(outletStatuses))
 }
 
-// schedulePostActionPolling schedules immediate polling after user actions
-func schedulePostActionPolling(serverID string) {
-	log.Printf("Scheduling post-action polling for server %s", serverID)
-	
-	// Poll immediately (bypassing cache)
-	go pollServerFresh(serverID)
-	
-	// Schedule follow-up polls to catch state changes
-	go func() {
-		time.Sleep(3 * time.Second)
-		pollServerFresh(serverID)
-		
-		time.Sleep(7 * time.Second) // 10s total
-		pollServerFresh(serverID)
-		
-		time.Sleep(20 * time.Second) // 30s total
-		pollServerFresh(serverID)
-	}()
-}
-
-// pollServerFresh polls a server with cache bypass for fresh data
-func pollServerFresh(serverID string) {
-	log.Printf("Fresh polling server %s (bypassing cache)", serverID)
-	
-	config, err := loadConfig()
-	if err != nil {
-		log.Printf("Error loading config for fresh polling: %v", err)
-		return
-	}
-
-	var server *Server
-	for _, s := range config.Servers {
-		if s.ID == serverID {
-			server = &s
-			break
-		}
-	}
-
+func (p *Poller) pollBMC(ctx context.Context, config *Config, serverID string) bool {
+	server := config.Server(serverID)
 	if server == nil {
-		log.Printf("Server %s not found for fresh polling", serverID)
-		return
+		return false
 	}
-
-	// Get fresh IPMI status
-	var systemStatus string
-	if server.IPMI.Host != "" {
-		systemStatus, err = getIPMIStatusInternal(serverID)
-		if err != nil {
-			systemStatus = "unreachable"
-		}
-	} else {
-		systemStatus = "no_ipmi"
+	bmc := p.hw.BMC(server)
+	if bmc == nil {
+		return false
 	}
-
-	// Get fresh PDU status (bypassing cache)
-	var powerStatus string
-	if len(server.PDUOutlets) > 0 {
-		powerStatus, err = getPDUStatusForServerFresh(serverID)
-		if err != nil {
-			powerStatus = "unreachable"
-		}
-	} else {
-		powerStatus = "no_pdu"
+	ctx, cancel := context.WithTimeout(ctx, bmcPollTimeout)
+	defer cancel()
+	power, err := bmc.PowerState(ctx)
+	if debugMode && err != nil {
+		log.Printf("DEBUG: BMC poll %s: %v", serverID, err)
 	}
-
-	// Determine overall reachability
-	isReachable := (systemStatus != "unreachable" && systemStatus != "no_ipmi") || 
-	              (powerStatus != "unreachable" && powerStatus != "no_pdu")
-
-	cache.UpdateDualStatus(serverID, systemStatus, powerStatus, isReachable, nil)
-	
-	log.Printf("Fresh poll complete for %s: system=%s, power=%s", serverID, systemStatus, powerStatus)
+	p.state.RecordBMC(serverID, power, err)
+	return err == nil
 }
 
-// refreshAllServersFresh forces fresh polling of all servers (for manual refresh)
-func refreshAllServersFresh() {
-	log.Printf("Manual refresh: clearing PDU cache and polling all servers fresh")
-	
-	// Clear PDU cache to force fresh queries
-	clearPDUCache()
-	
-	config, err := loadConfig()
-	if err != nil {
-		log.Printf("Error loading config for manual refresh: %v", err)
-		return
-	}
-	
-	// Poll all servers with fresh data in parallel
-	for _, server := range config.Servers {
-		go pollServerFresh(server.ID)
-	}
-}
-
-// getPDUStatusForServerFresh gets PDU status with cache bypass
-func getPDUStatusForServerFresh(serverID string) (string, error) {
-	config, err := loadConfig()
-	if err != nil {
-		return "", err
-	}
-
-	var server *Server
-	for _, s := range config.Servers {
-		if s.ID == serverID {
-			server = &s
-			break
-		}
-	}
-
-	if server == nil {
-		return "", fmt.Errorf("server %s not found", serverID)
-	}
-
-	if len(server.PDUOutlets) == 0 {
-		return "", fmt.Errorf("server %s has no PDU outlets configured", serverID)
-	}
-
-	// Parse first PDU outlet (format: "pdu-id:outlet")
-	parts := strings.Split(server.PDUOutlets[0], ":")
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid PDU outlet format: %s", server.PDUOutlets[0])
-	}
-
-	pduID := parts[0]
-	outlet, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return "", fmt.Errorf("invalid outlet number: %s", parts[1])
-	}
-
-	// Find the PDU configuration
-	var pdu *PDU
-	for _, p := range config.PDUs {
-		if p.ID == pduID {
-			pdu = &p
-			break
-		}
-	}
-
+func (p *Poller) pollPDU(ctx context.Context, config *Config, pduID string) bool {
+	pdu := config.PDU(pduID)
 	if pdu == nil {
-		return "", fmt.Errorf("PDU %s not found", pduID)
+		return false
 	}
 
-	// Get fresh PDU outlet status (bypassing cache)
-	statusMap, err := getBulkPDUStatusFresh(pdu, []int{outlet})
-	if err != nil {
-		return "", err
+	// Every outlet on this PDU that belongs to a server
+	owners := make(map[int][]string) // outlet -> server IDs
+	var outlets []int
+	for i := range config.Servers {
+		for _, ref := range config.Servers[i].Outlets() {
+			if ref.PDUID != pduID {
+				continue
+			}
+			if _, seen := owners[ref.Outlet]; !seen {
+				outlets = append(outlets, ref.Outlet)
+			}
+			owners[ref.Outlet] = append(owners[ref.Outlet], config.Servers[i].ID)
+		}
 	}
-	
-	if status, exists := statusMap[outlet]; exists {
-		return status, nil
+
+	ctx, cancel := context.WithTimeout(ctx, pduPollTimeout)
+	defer cancel()
+	states, err := p.hw.PDU(pdu).OutletStates(ctx, outlets)
+	if debugMode && err != nil {
+		log.Printf("DEBUG: PDU poll %s: %v", pduID, err)
 	}
-	
-	return "", fmt.Errorf("outlet %d status not found", outlet)
+
+	byServer := make(map[string]map[string]PowerState)
+	for outlet, serverIDs := range owners {
+		for _, id := range serverIDs {
+			if byServer[id] == nil {
+				byServer[id] = make(map[string]PowerState)
+			}
+			if state, ok := states[outlet]; ok {
+				byServer[id][OutletRef{PDUID: pduID, Outlet: outlet}.String()] = state
+			}
+		}
+	}
+	for id, outletStates := range byServer {
+		p.state.RecordOutlets(id, outletStates, err)
+	}
+	return err == nil
 }
 
-// getIPMIStatusDirect is the same as getIPMIStatus but doesn't cache the result
-func getIPMIStatusDirect(serverID string) (string, error) {
-	return getIPMIStatusInternal(serverID)
+// PollNow polls one server's BMC and outlets synchronously and returns the fresh state
+func (p *Poller) PollNow(ctx context.Context, serverID string) (ServerState, bool) {
+	config := p.config.Get()
+	server := config.Server(serverID)
+	if server == nil {
+		return ServerState{}, false
+	}
+
+	var wg sync.WaitGroup
+	if server.HasBMC() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.pollBMC(ctx, config, serverID)
+		}()
+	}
+	seen := make(map[string]bool)
+	for _, ref := range server.Outlets() {
+		if seen[ref.PDUID] {
+			continue
+		}
+		seen[ref.PDUID] = true
+		wg.Add(1)
+		go func(pduID string) {
+			defer wg.Done()
+			p.pollPDU(ctx, config, pduID)
+		}(ref.PDUID)
+	}
+	wg.Wait()
+	return p.state.Get(serverID)
+}
+
+// PollAllNow polls every server at once, e.g. for a manual refresh
+func (p *Poller) PollAllNow(ctx context.Context) {
+	config := p.config.Get()
+	var wg sync.WaitGroup
+	for i := range config.Servers {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			p.PollNow(ctx, id)
+		}(config.Servers[i].ID)
+	}
+	wg.Wait()
 }

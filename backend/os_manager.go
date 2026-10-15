@@ -11,15 +11,15 @@ import (
 
 // OSTemplate represents a bootable OS configuration
 type OSTemplate struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	BootMethod  string            `json:"boot_method"` // "chain", "template", "local"
-	NextPath    string            `json:"next_path,omitempty"`
-	BootTemplate string           `json:"boot_template,omitempty"`
-	Variables   map[string]string `json:"variables,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	IsBuiltIn   bool              `json:"is_built_in"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description"`
+	BootMethod   string            `json:"boot_method"` // "chain", "template", "local"
+	NextPath     string            `json:"next_path,omitempty"`
+	BootTemplate string            `json:"boot_template,omitempty"`
+	Variables    map[string]string `json:"variables,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	IsBuiltIn    bool              `json:"is_built_in"`
 }
 
 // ServerOSAssignment represents the OS assigned to a server
@@ -28,6 +28,10 @@ type ServerOSAssignment struct {
 	TemplateID string    `json:"template_id"`
 	AssignedAt time.Time `json:"assigned_at"`
 	AssignedBy string    `json:"assigned_by,omitempty"`
+	// OneShot assignments are served for a single network boot, then the
+	// previous assignment (or local boot) comes back
+	OneShot  bool                `json:"one_shot,omitempty"`
+	Previous *ServerOSAssignment `json:"previous,omitempty"`
 }
 
 // OSManager manages OS templates and server assignments
@@ -43,10 +47,10 @@ func NewOSManager() *OSManager {
 		templates:   make(map[string]OSTemplate),
 		assignments: make(map[string]ServerOSAssignment),
 	}
-	
+
 	// Load built-in templates
 	manager.loadBuiltInTemplates()
-	
+
 	return manager
 }
 
@@ -61,50 +65,8 @@ func (m *OSManager) loadBuiltInTemplates() {
 			CreatedAt:   time.Now(),
 			IsBuiltIn:   true,
 		},
-		{
-			ID:          "nixos-stable",
-			Name:        "NixOS 24.05 Stable",
-			Description: "Latest stable NixOS with flake support",
-			BootMethod:  "chain",
-			NextPath:    "https://netboot.nixos.org/ipxe?hostname={{.Hostname}}&mac={{.MAC}}&role={{.Role}}",
-			CreatedAt:   time.Now(),
-			IsBuiltIn:   true,
-		},
-		{
-			ID:          "ubuntu-22.04-autoinstall",
-			Name:        "Ubuntu 22.04 LTS Autoinstall",
-			Description: "Ubuntu 22.04 with automated installation",
-			BootMethod:  "template",
-			BootTemplate: `#!ipxe
-
-echo Lab Manager - Ubuntu 22.04 Autoinstall for {{.Hostname}}
-echo Role: {{.Role}}
-echo MAC: {{.MAC}}
-
-# Download kernel and initrd
-kernel http://archive.ubuntu.com/ubuntu/dists/jammy/main/installer-amd64/current/legacy-images/netboot/ubuntu-installer/amd64/linux
-initrd http://archive.ubuntu.com/ubuntu/dists/jammy/main/installer-amd64/current/legacy-images/netboot/ubuntu-installer/amd64/initrd.gz
-
-# Boot with autoinstall parameters
-imgargs linux auto=true priority=critical
-imgargs linux hostname={{.Hostname}}
-imgargs linux preseed/url=http://lab-manager:8098/preseed/{{.Role}}.cfg
-
-boot`,
-			CreatedAt: time.Now(),
-			IsBuiltIn: true,
-		},
-		{
-			ID:          "rescue-system",
-			Name:        "System Rescue CD",
-			Description: "Network-based rescue environment",
-			BootMethod:  "chain",
-			NextPath:    "http://rescue.lab.local/sysrescue?target={{.Hostname}}&client={{.IncomingServerIP}}",
-			CreatedAt:   time.Now(),
-			IsBuiltIn:   true,
-		},
 	}
-	
+
 	for _, template := range builtInTemplates {
 		m.templates[template.ID] = template
 	}
@@ -114,12 +76,12 @@ boot`,
 func (m *OSManager) GetAllTemplates() []OSTemplate {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	templates := make([]OSTemplate, 0, len(m.templates))
 	for _, template := range m.templates {
 		templates = append(templates, template)
 	}
-	
+
 	return templates
 }
 
@@ -127,7 +89,7 @@ func (m *OSManager) GetAllTemplates() []OSTemplate {
 func (m *OSManager) GetTemplate(id string) (OSTemplate, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	template, exists := m.templates[id]
 	return template, exists
 }
@@ -136,22 +98,22 @@ func (m *OSManager) GetTemplate(id string) (OSTemplate, bool) {
 func (m *OSManager) AddTemplate(template OSTemplate) (OSTemplate, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	if template.ID == "" {
 		template.ID = m.uniqueTemplateID(template.Name)
 	}
 	if template.ID == "" {
 		return OSTemplate{}, fmt.Errorf("template needs an ID or a name")
 	}
-	
+
 	if _, exists := m.templates[template.ID]; exists {
 		return OSTemplate{}, fmt.Errorf("template with ID %s already exists", template.ID)
 	}
-	
+
 	template.CreatedAt = time.Now()
 	template.IsBuiltIn = false
 	m.templates[template.ID] = template
-	
+
 	return template, nil
 }
 
@@ -186,21 +148,21 @@ func (m *OSManager) uniqueTemplateID(name string) string {
 func (m *OSManager) UpdateTemplate(template OSTemplate) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	existing, exists := m.templates[template.ID]
 	if !exists {
 		return fmt.Errorf("template with ID %s not found", template.ID)
 	}
-	
+
 	if existing.IsBuiltIn {
 		return fmt.Errorf("cannot modify built-in template %s", template.ID)
 	}
-	
+
 	// Preserve creation time and built-in status
 	template.CreatedAt = existing.CreatedAt
 	template.IsBuiltIn = false
 	m.templates[template.ID] = template
-	
+
 	return nil
 }
 
@@ -208,23 +170,23 @@ func (m *OSManager) UpdateTemplate(template OSTemplate) error {
 func (m *OSManager) DeleteTemplate(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	template, exists := m.templates[id]
 	if !exists {
 		return fmt.Errorf("template with ID %s not found", id)
 	}
-	
+
 	if template.IsBuiltIn {
 		return fmt.Errorf("cannot delete built-in template %s", id)
 	}
-	
+
 	// Check if any servers are using this template
 	for _, assignment := range m.assignments {
 		if assignment.TemplateID == id {
 			return fmt.Errorf("cannot delete template %s: still assigned to servers", id)
 		}
 	}
-	
+
 	delete(m.templates, id)
 	return nil
 }
@@ -233,28 +195,73 @@ func (m *OSManager) DeleteTemplate(id string) error {
 func (m *OSManager) AssignOSToServer(serverID, templateID, assignedBy string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// Verify template exists
 	if _, exists := m.templates[templateID]; !exists {
 		return fmt.Errorf("template with ID %s not found", templateID)
 	}
-	
+
 	assignment := ServerOSAssignment{
 		ServerID:   serverID,
 		TemplateID: templateID,
 		AssignedAt: time.Now(),
 		AssignedBy: assignedBy,
 	}
-	
+
 	m.assignments[serverID] = assignment
 	return nil
+}
+
+// AssignOneShot serves a template on the server's next network boot only
+func (m *OSManager) AssignOneShot(serverID, templateID, assignedBy string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.templates[templateID]; !exists {
+		return fmt.Errorf("template with ID %s not found", templateID)
+	}
+	assignment := ServerOSAssignment{
+		ServerID:   serverID,
+		TemplateID: templateID,
+		AssignedAt: time.Now(),
+		AssignedBy: assignedBy,
+		OneShot:    true,
+	}
+	if current, ok := m.assignments[serverID]; ok {
+		// Stacking one-shots keeps the original persistent assignment underneath
+		if current.OneShot {
+			assignment.Previous = current.Previous
+		} else {
+			assignment.Previous = &current
+		}
+	}
+	m.assignments[serverID] = assignment
+	return nil
+}
+
+// ConsumeOneShot restores the previous assignment after a one-shot was served.
+// It returns true if there was a one-shot to consume.
+func (m *OSManager) ConsumeOneShot(serverID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	current, ok := m.assignments[serverID]
+	if !ok || !current.OneShot {
+		return false
+	}
+	if current.Previous != nil {
+		m.assignments[serverID] = *current.Previous
+	} else {
+		delete(m.assignments, serverID)
+	}
+	return true
 }
 
 // GetServerOSAssignment returns the OS assignment for a server
 func (m *OSManager) GetServerOSAssignment(serverID string) (ServerOSAssignment, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	assignment, exists := m.assignments[serverID]
 	return assignment, exists
 }
@@ -263,7 +270,7 @@ func (m *OSManager) GetServerOSAssignment(serverID string) (ServerOSAssignment, 
 func (m *OSManager) RemoveServerOSAssignment(serverID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	delete(m.assignments, serverID)
 }
 
@@ -271,12 +278,12 @@ func (m *OSManager) RemoveServerOSAssignment(serverID string) {
 func (m *OSManager) GetAllAssignments() []ServerOSAssignment {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	assignments := make([]ServerOSAssignment, 0, len(m.assignments))
 	for _, assignment := range m.assignments {
 		assignments = append(assignments, assignment)
 	}
-	
+
 	return assignments
 }
 
@@ -284,12 +291,12 @@ func (m *OSManager) GetAllAssignments() []ServerOSAssignment {
 func (m *OSManager) BulkAssignOS(serverIDs []string, templateID, assignedBy string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// Verify template exists
 	if _, exists := m.templates[templateID]; !exists {
 		return fmt.Errorf("template with ID %s not found", templateID)
 	}
-	
+
 	now := time.Now()
 	for _, serverID := range serverIDs {
 		assignment := ServerOSAssignment{
@@ -300,7 +307,7 @@ func (m *OSManager) BulkAssignOS(serverIDs []string, templateID, assignedBy stri
 		}
 		m.assignments[serverID] = assignment
 	}
-	
+
 	return nil
 }
 
@@ -308,7 +315,7 @@ func (m *OSManager) BulkAssignOS(serverIDs []string, templateID, assignedBy stri
 func (m *OSManager) SaveToFile(filepath string) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	data := struct {
 		Templates   map[string]OSTemplate         `json:"templates"`
 		Assignments map[string]ServerOSAssignment `json:"assignments"`
@@ -318,20 +325,25 @@ func (m *OSManager) SaveToFile(filepath string) error {
 		Assignments: m.assignments,
 		SavedAt:     time.Now(),
 	}
-	
+
 	// Only save custom templates (not built-ins)
 	for id, template := range m.templates {
 		if !template.IsBuiltIn {
 			data.Templates[id] = template
 		}
 	}
-	
+
 	jsonData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal OS data: %v", err)
 	}
-	
-	return os.WriteFile(filepath, jsonData, 0644)
+
+	// Write then rename so a crash mid-write can't leave a truncated file
+	tmp := filepath + ".tmp"
+	if err := os.WriteFile(tmp, jsonData, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath)
 }
 
 // LoadFromFile loads assignments from a JSON file
@@ -344,32 +356,32 @@ func (m *OSManager) LoadFromFile(filepath string) error {
 		}
 		return fmt.Errorf("failed to read OS data file: %v", err)
 	}
-	
+
 	var fileData struct {
 		Templates   map[string]OSTemplate         `json:"templates"`
 		Assignments map[string]ServerOSAssignment `json:"assignments"`
 		SavedAt     time.Time                     `json:"saved_at"`
 	}
-	
+
 	if err := json.Unmarshal(data, &fileData); err != nil {
 		return fmt.Errorf("failed to unmarshal OS data: %v", err)
 	}
-	
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// Load custom templates
 	for id, template := range fileData.Templates {
 		if !template.IsBuiltIn {
 			m.templates[id] = template
 		}
 	}
-	
+
 	// Load assignments
 	m.assignments = fileData.Assignments
 	if m.assignments == nil {
 		m.assignments = make(map[string]ServerOSAssignment)
 	}
-	
+
 	return nil
 }

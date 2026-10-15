@@ -26,7 +26,6 @@ frontend/.DS_Store
 
 # Go modules and build cache
 vendor/
-go.sum
 *.mod.bak
 
 # IDE and editor files
