@@ -1,308 +1,173 @@
 # Lab Manager
 
-A comprehensive lab management system for controlling and monitoring physical servers through IPMI/Redfish and PDU (Power Distribution Unit) interfaces. Built with Go backend and Vue.js frontend, providing real-time status monitoring, job queue management, and flexible power control for diverse hardware configurations.
+Lab Manager controls and watches the physical servers in a lab: power through each server's BMC (Redfish) and its PDU outlets (APC over SNMP, or simple HTTP PDUs), network boot through iPXE, and a serial console in the browser. It's one Go binary with the web UI embedded.
 
 ## Features
 
-### Device Support
-- **IPMI/Redfish Control**: Full BMC integration for server power management and status monitoring
-- **PDU Integration**: Support for APC PDUs via SNMP and generic HTTP-based PDUs
-- **Flexible Configuration**: Support for IPMI-only, PDU-only, or combined IPMI+PDU devices
-- **Intelligent Fallback**: Automatic fallback to available control methods when primary fails
+### Power
+- **Planned operations**: Power on, shut down, restart, power off, and power cycle are planned from the server's current state into visible steps (outlets on → wait for the BMC → power on → wait until the system reports on), run one at a time per server, and retried with backoff where it makes sense.
+- **Waits on reality, not timers**: steps wait for the BMC to answer or the system to report its new power state, with a timeout, instead of sleeping a fixed time and hoping.
+- **Scheduling**: schedule any operation for later; it is planned when it runs, from the state at that moment.
+- **Safe after restarts**: operations and history are stored on disk. An operation that was running when Lab Manager stopped is marked interrupted, never resumed blindly.
 
-### Power Management
-- **Smart Power Sequences**: Coordinated power-on/off sequences with configurable delays
-- **Job Queue System**: Reliable job execution with dependencies, scheduling, and retry logic
-- **State Machine Logic**: Prevents invalid operations based on actual device state
-- **Bulk Operations**: Efficient bulk PDU operations to minimize SNMP load
+### Network boot
+- **Boot images** (iPXE chain URLs, inline iPXE scripts, or local disk) assigned per server.
+- **Next boot only**: serve an image for one network boot, then revert to what the server had before.
+- **Reinstall**: one action that serves an installer once, tells the BMC to network boot once, restarts (or powers on) the server, and waits until it fetches its script.
+- **BMC boot device**: network, BIOS setup, or disk on the next boot.
+- **Preview** of the exact iPXE script each server gets, and when it last network booted.
 
-### Monitoring & Status
-- **Real-time Status**: Live server status with dual tracking (system vs power status)
-- **Background Polling**: Optimized polling with different intervals for reachable/unreachable devices
-- **Visual Indicators**: Error triangles with tooltips for failed operations
-- **Connection Management**: Robust frontend with offline data caching and reconnection logic
+### Console and diagnostics
+- **Serial console in the browser**: Lab Manager logs in to the BMC over SSH and attaches to the host's serial port (`console com2` on iDRAC, `console 1` on XCC, configurable). Viewers share one session; recent output is kept and downloadable.
+- **Graphical console**: a link to the BMC's own web KVM.
+- **Hardware details and BMC event log** (model, serial, BIOS, health; watchdog resets, PSU faults, PCIe errors).
 
-### User Interface
-- **Modern Web UI**: Responsive Vue.js interface with real-time updates
-- **Job Management**: Complete job queue visibility with retry and cancellation
-- **Error Tracking**: Persistent error indicators with detailed failure information
-- **PXE Boot System**: Advanced iPXE integration with templating and chain loading
+### Interface
+- Live updates over Server-Sent Events, with a step track for every running operation.
+- A dense server table with a side panel per server (Overview, Boot, Activity, Console), deep-linkable as `#/servers/<id>/<tab>`.
+- Activity history for every action: who did what, when, and how it went.
+- Light and dark themes; works on a phone.
 
-## Installation
+## Quick start
 
-### Prerequisites
-- Go 1.19 or later
-- Node.js 16+ and npm (for frontend development)
-- Access to IPMI-enabled servers
-- APC PDUs or HTTP-controllable PDUs
-
-### Quick Start
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/your-org/labmgr.git
-   cd labmgr
-   ```
-
-2. **Build the application**
-   ```bash
-   # Build frontend
-   cd frontend
-   npm install
-   npm run build
-   cd ..
-   
-   # Build backend with embedded frontend
-   cd backend
-   go build -o ../labmgr .
-   ```
-
-3. **Create configuration**
-   ```bash
-   mkdir -p config
-   cp config.example.yaml config/servers.yaml
-   # Edit config/servers.yaml with your server details
-   ```
-
-4. **Run the application**
-   ```bash
-   ./labmgr -config config/servers.yaml
-   ```
-
-5. **Access the web interface**
-   Open http://localhost:8098 in your browser
-
-### Development Setup
-
-For development with hot-reload:
+Prerequisites: Go 1.25+, Node.js 20.19+ or 22.12+, network access to your BMCs (HTTPS 443, SSH 22) and PDUs (SNMP 161).
 
 ```bash
-# Terminal 1: Start backend
-cd backend
-go run . -debug -config ../config/servers.yaml
-
-# Terminal 2: Start frontend dev server
-cd frontend
-npm run serve
+make build                                  # frontend (typecheck + bundle) and backend, embedded
+cp config/servers.yaml.example config/servers.yaml
+$EDITOR config/servers.yaml                 # your servers, BMC credentials, PDUs
+./labmgr -config config/servers.yaml
 ```
 
+Open http://localhost:8098.
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `-config` | `config/servers.yaml` | Server and PDU definitions. Reloaded automatically when the file changes, or on `SIGHUP`. |
+| `-listen` | `0.0.0.0:8098` | Address to serve on. |
+| `-data` | next to the config, e.g. `config/servers.db` | Operations and activity history. |
+| `-debug` | off | Log every request and driver detail. |
+
+OS boot images and assignments are stored next to the config as `servers.os.json`.
+
+## Development
+
+```bash
+make test                                   # Go tests (fake hardware) with -race, and the TypeScript typecheck
+
+# Terminal 1: backend
+cd backend && go run . -config ../config/servers.yaml
+
+# Terminal 2: frontend with hot reload on :8099, proxying /api to the backend
+cd frontend && npm run dev
+# point it elsewhere with LABMGR_API=http://host:8098, or change port with PORT=...
+```
+
+The engine tests run against a simulated lab (outlets feed servers, a BMC goes dark when its outlets are off) with time scaled down, so they're fast and never touch real hardware.
+
 ## Configuration
-
-The system uses a YAML configuration file to define servers and PDUs. See `config.example.yaml` for a complete example.
-
-### Basic Server Configuration
 
 ```yaml
 servers:
   - id: "server1"
     name: "Web Server 1"
     description: "Production web server"
-    ipmi:
+    ipmi:                       # the BMC, reached over Redfish (HTTPS) and SSH
       host: "192.168.1.100"
       username: "admin"
       password: "password"
-    pdu_outlets:
+    pdu_outlets:                # optional; "pdu-id:outlet"
       - "pdu1:1"
       - "pdu1:2"
+    console:                    # optional
+      command: "console com2"   # typed at the BMC prompt; detected from the vendor if omitted
+      ssh_port: 22
+      web_url: "https://192.168.1.100"
     metadata:
       role: "webserver"
-      mac: "aa:bb:cc:dd:ee:ff"
+      mac: "aa:bb:cc:dd:ee:ff"  # needed for network boot; any case or separator
       hostname: "web1.lab.local"
 
 pdus:
   - id: "pdu1"
     name: "Rack 1 PDU"
     host: "192.168.1.200"
-    type: "apc"
+    type: "apc"                 # SNMP; anything else uses the HTTP interface
     snmp_community: "private"
-    snmp_version: "v2c"
+    snmp_version: "v2c"         # v1 or v2c
 
 delays:
-  pdu_to_power_on_seconds: 10
-  power_off_to_pdu_seconds: 30
-  between_ipmi_seconds: 2
-  between_pdu_seconds: 1
+  pdu_to_power_on_seconds: 10   # after outlets come on, before waiting for the BMC
+  power_off_to_pdu_seconds: 30  # after the system is off, before cutting outlets
+  between_ipmi_seconds: 2       # power cycle pauses twice this between off and on
+  between_pdu_seconds: 3        # between consecutive outlet switches (minimum 3)
 ```
 
-### Device Types
+A server needs a BMC (`ipmi.host`), PDU outlets, or both. Credentials never leave the server: the API strips passwords and SNMP communities.
 
-- **IPMI + PDU**: Full control with both BMC and power outlet management
-- **IPMI Only**: Server control via BMC, no PDU outlets configured
-- **PDU Only**: Power control via PDU outlets, no IPMI configuration
+## API
 
-## API Reference
+`/api/v2` is the current API; `/api/v1` is kept working for older scripts. See [API.md](API.md).
 
-### Server Control
-- `GET /api/v1/servers` - List all servers
-- `GET /api/v1/servers/:id` - Get server details
-- `POST /api/v1/servers/:id/power` - Power control (on/off/reboot)
-- `POST /api/v1/servers/:id/ipmi` - Direct IPMI commands
-- `GET /api/v1/servers/:id/status` - Get server status
+## iPXE integration
 
-### Job Management
-- `GET /api/v1/jobs` - List all jobs
-- `GET /api/v1/jobs/:id` - Get job details
-- `POST /api/v1/jobs/:id/retry` - Retry failed job
-- `DELETE /api/v1/jobs/:id` - Cancel job
-- `POST /api/v1/jobs/schedule` - Schedule job for later execution
+Point your DHCP server's iPXE clients at `http://lab-manager:8098/static/boot.ipxe` (or chain straight to `/api/v1/autoexec.ipxe?mac=${net0/mac}`). Lab Manager finds the server by MAC and answers with, in order of priority:
 
-### Status Monitoring
-- `GET /api/v1/status` - Get all server statuses
-- `GET /api/v1/status?force=true` - Force refresh all statuses
+1. the boot image assigned to it (a one-time assignment wins, then reverts),
+2. `metadata.next-path` (chain to a URL),
+3. `metadata.boot-template` (an inline iPXE script),
+4. a local disk boot.
 
-### PXE Boot System
-- `GET /boot/:mac` - Get iPXE boot script for MAC address
-- `GET /autoexec.ipxe?mac=xx:xx:xx:xx:xx:xx` - Standard iPXE auto-execution endpoint
+Templates use Go template syntax with `{{.MAC}}`, `{{.Hostname}}`, `{{.Role}}`, `{{.ServerName}}`, `{{.ServerID}}`, `{{.IncomingServerIP}}`, and `{{.Metadata.key}}`.
 
-## iPXE Integration
+Chain loading:
 
-Lab Manager provides a comprehensive iPXE boot system with templating and chain loading capabilities for automated server deployment.
-
-### Endpoints
-
-- **`/api/v1/autoexec.ipxe`** - Standard iPXE auto-execution endpoint
-- **`/api/v1/boot/:mac`** - Legacy MAC-based boot script endpoint
-
-### Features
-
-#### 1. Template Variables
-Dynamic iPXE scripts with access to:
-- `{{.MAC}}` - Server MAC address
-- `{{.Hostname}}` - Server hostname
-- `{{.Role}}` - Server role
-- `{{.ServerName}}` - Server display name
-- `{{.IncomingServerIP}}` - Client IP address
-- `{{.Metadata.field}}` - Any custom metadata field
-
-#### 2. Chain Loading
-Redirect servers to external boot services:
 ```yaml
 metadata:
-  next-path: "http://netboot.nixos.org/ipxe?hostname={{.Hostname}}&mac={{.MAC}}"
+  next-path: "https://boot.netboot.xyz/menu.ipxe"
 ```
 
-#### 3. Custom Boot Templates
-Complete control over iPXE scripts:
+Inline script (Debian netboot installer):
+
 ```yaml
 metadata:
   boot-template: |
     #!ipxe
-    echo Booting {{.Hostname}} with role {{.Role}}
-    kernel http://example.com/vmlinuz hostname={{.Hostname}}
-    initrd http://example.com/initrd.gz
+    set mirror http://deb.debian.org/debian/dists/stable/main/installer-amd64/current/images/netboot/debian-installer/amd64
+    kernel ${mirror}/linux auto=true priority=critical hostname={{.Hostname}} url=http://lab.example.com/preseed/{{.Role}}.cfg
+    initrd ${mirror}/initrd.gz
     boot
 ```
 
-### Configuration Examples
-
-**NixOS Chain Loading:**
-```yaml
-servers:
-  - id: "nixos-dev"
-    metadata:
-      mac: "aa:bb:cc:dd:ee:04"
-      hostname: "nixos-dev1"
-      role: "development"
-      next-path: "http://netboot.nixos.org/ipxe?hostname={{.Hostname}}&mac={{.MAC}}&role={{.Role}}"
-```
-
-**Ubuntu Autoinstall:**
-```yaml
-servers:
-  - id: "ubuntu-web"
-    metadata:
-      mac: "aa:bb:cc:dd:ee:05"
-      hostname: "web1"
-      role: "webserver"
-      ubuntu_version: "22.04"
-      boot-template: |
-        #!ipxe
-        echo Ubuntu {{.Metadata.ubuntu_version}} autoinstall for {{.Hostname}}
-        kernel http://archive.ubuntu.com/ubuntu/dists/jammy/main/installer-amd64/current/legacy-images/netboot/ubuntu-installer/amd64/linux
-        initrd http://archive.ubuntu.com/ubuntu/dists/jammy/main/installer-amd64/current/legacy-images/netboot/ubuntu-installer/amd64/initrd.gz
-        imgargs linux auto=true hostname={{.Hostname}} preseed/url=http://lab.example.com/preseed/{{.Role}}.cfg
-        boot
-```
-
-**Simple Local Boot (Default):**
-```yaml
-servers:
-  - id: "local-server"
-    metadata:
-      mac: "aa:bb:cc:dd:ee:06"
-      hostname: "server1"
-      role: "storage"
-      # No next-path or boot-template = uses default local boot
-```
-
-### Integration Workflow
-
-1. **Server boots** and requests `http://lab-manager:8098/static/boot.ipxe`
-2. **Static script** chains to `/api/v1/autoexec.ipxe?mac=${mac}`
-3. **Lab Manager** looks up server by MAC address
-4. **Template processing** applies variables to next-path or boot-template
-5. **Generated script** returned with server-specific configuration
+The same scripts can be saved as boot images in the UI (Boot images → New boot image) and assigned without editing the config.
 
 ## Architecture
 
-### Backend (Go)
-- **Gin HTTP Framework**: RESTful API with embedded static files
-- **Job Queue System**: Concurrent job processing with dependencies
-- **Status Cache**: Intelligent caching with dual status tracking
-- **Device Abstraction**: Unified interface for IPMI and PDU operations
+**Backend (Go, `backend/`)**
+- `config.go`: config store; parsed once, validated, hot reloaded.
+- `state.go`, `poller.go`: observed state per server (BMC link and system power, PDU link and each outlet), polled on per-device schedules (faster while an operation runs); one SNMP query per PDU. The display state (`on`, `off`, `powered`, `powering_on`, …) is derived in one place.
+- `engine.go`, `plans.go`, `execute.go`, `reinstall.go`: operations. Planners turn a request plus current state into steps; the engine runs them (one operation per server), with retries, cancellation, scheduling, and persistence.
+- `redfish.go`, `pdu.go`, `hardware.go`: drivers behind interfaces (Redfish via gofish with basic auth so polling doesn't use up BMC sessions; APC SNMP; HTTP PDUs).
+- `console.go`: shared SSH serial console sessions with scrollback, bridged to WebSockets.
+- `store.go` (bbolt), `events.go` (SSE hub), `api.go` (v2), `api_v1.go` (compatibility), `boot.go` (iPXE).
 
-### Frontend (Vue.js)
-- **Reactive UI**: Real-time updates with automatic reconnection
-- **Component Architecture**: Modular design with reusable components
-- **Error Handling**: Comprehensive error display with user feedback
-- **Offline Support**: Graceful degradation with cached data
-
-### Integration Points
-- **IPMI/Redfish**: Direct BMC communication for server control
-- **SNMP**: APC PDU integration with bulk operations
-- **HTTP APIs**: Generic PDU support via REST interfaces
+**Frontend (Vue 3 + TypeScript, `frontend/`)**
+- `store.ts`: one live store fed by `/api/v2/stream`.
+- `views/`: Servers, Boot images, Activity. `components/`: the server panel and its tabs, step track, dialogs.
+- `styles/app.css`: design tokens (light and dark).
 
 ## Troubleshooting
 
-### Common Issues
+**A server shows Unreachable**: the BMC isn't answering HTTPS. The panel shows the reason (no route to host, connection refused, login rejected). If the server has PDU outlets and they're off, its BMC is dark too; that shows as Off, not Unreachable.
 
-**Servers show "unreachable"**
-- Check IPMI credentials and network connectivity
-- Verify PDU SNMP community strings
-- Review firewall rules for IPMI (623) and SNMP (161) ports
+**Powered (amber)**: the outlets are live but the BMC isn't responding. Power cycle clears a hung BMC.
 
-**Jobs failing repeatedly**
-- Check server power states match expectations
-- Verify delay configurations for your hardware
-- Review job logs in the web interface
+**Console connects but stays blank**: the BMC attached to the serial port, but the host isn't writing to it. Point the OS console at the BMC's serial port (e.g. `console=ttyS1,115200` on iDRAC, `ttyS0` on many XCCs) or enable a serial getty. Some BMCs also need serial-over-LAN enabled in their settings.
 
-**Slow status updates**
-- Confirm PDU SNMP response times
-- Adjust polling intervals in poller.go if needed
-- Check network latency to IPMI interfaces
-
-### Debug Mode
-
-Run with debug logging enabled:
-```bash
-./labmgr -debug -config config/servers.yaml
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable  
-5. Submit a pull request
+**An operation failed**: open the server's Activity tab. Each step shows its attempts and the exact error; Try again re-plans from the current state.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-For issues and questions:
-- Create an issue on GitHub
-- Check the troubleshooting section above
-- Review the configuration examples
+MIT; see [LICENSE](LICENSE).

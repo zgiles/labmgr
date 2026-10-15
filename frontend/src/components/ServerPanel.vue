@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted } from 'vue'
 import { serverActions } from '../actions'
 import { stateExplanation } from '../format'
 import { serverById } from '../store'
@@ -8,9 +8,11 @@ import ActionMenu from './ActionMenu.vue'
 import Icon from './Icon.vue'
 import PanelActivity from './PanelActivity.vue'
 import PanelBoot from './PanelBoot.vue'
-import PanelConsole from './PanelConsole.vue'
 import PanelOverview from './PanelOverview.vue'
 import StateBadge from './StateBadge.vue'
+
+// xterm.js is large; load it only when someone opens a console
+const PanelConsole = defineAsyncComponent(() => import('./PanelConsole.vue'))
 
 const server = computed(() => serverById(ui.serverId ?? undefined))
 

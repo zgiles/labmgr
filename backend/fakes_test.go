@@ -152,7 +152,9 @@ func (b *fakeBMC) SetBootOverride(ctx context.Context, target string, persistent
 	return nil
 }
 
-func (b *fakeBMC) Info(ctx context.Context) (BMCInfo, error) { return BMCInfo{Model: "Fake"}, nil }
+func (b *fakeBMC) Info(ctx context.Context) (BMCInfo, error) {
+	return BMCInfo{Manufacturer: "Dell Inc.", Model: "Fake"}, nil
+}
 
 func (b *fakeBMC) Logs(ctx context.Context, limit int) ([]BMCLogEntry, error) { return nil, nil }
 
@@ -243,7 +245,7 @@ func newTestApp(t *testing.T) (*App, *fakeLab) {
 		engine.Wait()
 		store.Close()
 	})
-	return &App{config: config, state: state, poller: poller, engine: engine, store: store, hub: hub, hw: lab}, lab
+	return &App{config: config, state: state, poller: poller, engine: engine, store: store, hub: hub, hw: lab, consoles: NewConsoleHub(config, lab)}, lab
 }
 
 // waitOp waits for an operation to finish and returns it

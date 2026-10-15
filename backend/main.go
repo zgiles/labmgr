@@ -24,13 +24,14 @@ var osManager *OSManager
 
 // App holds the running services that HTTP handlers use
 type App struct {
-	config *ConfigStore
-	state  *StateStore
-	poller *Poller
-	engine *Engine
-	store  *Store
-	hub    *Hub
-	hw     Hardware
+	config   *ConfigStore
+	state    *StateStore
+	poller   *Poller
+	engine   *Engine
+	store    *Store
+	hub      *Hub
+	hw       Hardware
+	consoles *ConsoleHub
 }
 
 func main() {
@@ -79,7 +80,7 @@ func main() {
 		log.Fatalf("Failed to load operations: %v", err)
 	}
 
-	app := &App{config: config, state: state, poller: poller, engine: engine, store: store, hub: hub, hw: hw}
+	app := &App{config: config, state: state, poller: poller, engine: engine, store: store, hub: hub, hw: hw, consoles: NewConsoleHub(config, hw)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -136,7 +137,8 @@ func (a *App) router() http.Handler {
 	a.registerV1(r.Group("/api/v1"))
 	a.registerV2(r.Group("/api/v2"))
 
-	r.GET("/static/*filepath", serveEmbeddedFile)
+	r.GET("/boot.ipxe", serveBootstrap)
+	r.GET("/static/boot.ipxe", serveBootstrap)
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API endpoint not found"})

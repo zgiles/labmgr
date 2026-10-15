@@ -14,11 +14,19 @@ servers:
       username: "admin"            # IPMI username
       password: "password"         # IPMI password
     pdu_outlets: ["pdu-01:1", "pdu-01:2"]  # PDU outlets for this server
+    # Serial console (optional). Lab Manager logs in to the BMC over SSH with the
+    # credentials above and types this command to attach to the host's serial port.
+    # Detected from the vendor when omitted: "console com2" (Dell iDRAC),
+    # "console 1" (Lenovo XCC), "vsp" (HPE iLO).
+    console:
+      command: "console com2"
+      # ssh_port: 22
+      # web_url: "https://192.168.1.101"   # link for the BMC's own graphical console
     metadata:
       hostname: "lab-server-01"
       role: "compute"              # Used for filtering/automation
       datacenter: "lab"
-      mac: "aa:bb:cc:dd:ee:01"    # For iPXE boot script matching
+      mac: "aa:bb:cc:dd:ee:01"    # For iPXE boot script matching (any case, : or -)
 
   # Example 2: IPMI-Only Device
   # - Direct IPMI power control

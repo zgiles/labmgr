@@ -151,6 +151,8 @@ func (a *App) registerV2(api *gin.RouterGroup) {
 	api.GET("/servers/:id/boot-script", a.v2BootScript)
 	api.GET("/servers/:id/bmc", a.v2BMCInfo)
 	api.GET("/servers/:id/bmc/logs", a.v2BMCLogs)
+	api.GET("/servers/:id/console", a.v2Console)
+	api.GET("/servers/:id/console/log", a.v2ConsoleLog)
 
 	api.POST("/refresh", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)

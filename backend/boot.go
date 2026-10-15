@@ -289,3 +289,28 @@ func (a *App) serveBootScript(c *gin.Context, rawMAC string) {
 	}
 	a.recordEvent(&Event{ServerID: server.ID, Kind: "boot", Message: message, Level: "info"})
 }
+
+// serveBootstrap is the first script iPXE clients fetch (DHCP points them here).
+// It chains to autoexec.ipxe with an absolute URL built from the request, so it
+// works however this script itself was loaded (relative URLs break under TFTP).
+func serveBootstrap(c *gin.Context) {
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	base := fmt.Sprintf("%s://%s/api/v1", scheme, c.Request.Host)
+	c.Header("Content-Type", "text/plain")
+	c.String(http.StatusOK, fmt.Sprintf(`#!ipxe
+
+# Lab Manager iPXE bootstrap
+echo Lab Manager: fetching boot configuration for ${net0/mac}
+
+chain %[1]s/autoexec.ipxe?mac=${net0/mac} ||
+
+echo Lab Manager unavailable, booting from local disk
+sanboot --no-describe --drive 0x80 ||
+
+echo Boot failed
+shell
+`, base))
+}

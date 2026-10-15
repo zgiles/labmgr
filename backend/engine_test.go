@@ -400,3 +400,14 @@ func TestBootScriptMatchesMACCaseInsensitively(t *testing.T) {
 		t.Error("boot fetch not recorded")
 	}
 }
+
+func TestBootstrapScriptChainsWithAbsoluteURL(t *testing.T) {
+	app, _ := newTestApp(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/static/boot.ipxe", nil)
+	req.Host = "labmgr.lab:8098"
+	app.router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "chain http://labmgr.lab:8098/api/v1/autoexec.ipxe?mac=${net0/mac}") {
+		t.Errorf("bootstrap script:\n%s", rec.Body)
+	}
+}
