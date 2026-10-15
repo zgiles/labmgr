@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -14,12 +15,23 @@ import (
 )
 
 var configPath string
+var listenAddr string
 var debugMode bool
+var osManager *OSManager
 
 func main() {
 	flag.StringVar(&configPath, "config", "config/servers.yaml", "Path to configuration file")
+	flag.StringVar(&listenAddr, "listen", "0.0.0.0:8098", "Address to listen on")
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug logging")
 	flag.Parse()
+	
+	// Initialize OS manager
+	osManager = NewOSManager()
+	
+	// Load persistent OS assignments if file exists
+	if err := osManager.LoadFromFile(osDataPath()); err != nil {
+		log.Printf("Warning: Failed to load OS assignments from %s: %v", osDataPath(), err)
+	}
 	
 	r := gin.Default()
 
@@ -49,6 +61,18 @@ func main() {
 		api.POST("/jobs/:id/run-now", runJobNow)
 		api.POST("/jobs/:id/retry", retryJob)
 		api.POST("/jobs/schedule", scheduleJob)
+		
+		// OS Management endpoints
+		api.GET("/os/templates", getOSTemplates)
+		api.GET("/os/templates/:id", getOSTemplate)
+		api.POST("/os/templates", createOSTemplate)
+		api.PUT("/os/templates/:id", updateOSTemplate)
+		api.DELETE("/os/templates/:id", deleteOSTemplate)
+		api.GET("/servers/:id/os", getServerOSAssignment)
+		api.PUT("/servers/:id/os", assignServerOS)
+		api.DELETE("/servers/:id/os", removeServerOSAssignment)
+		api.POST("/os/bulk-assign", bulkAssignOS)
+		api.GET("/os/assignments", getAllOSAssignments)
 	}
 
 	// Serve index.html for root and any non-API routes (SPA routing)
@@ -69,17 +93,19 @@ func main() {
 	startStatusPoller()
 	startJobProcessor()
 	
-	log.Println("Lab Manager starting on 0.0.0.0:8098")
-	r.Run("0.0.0.0:8098")
+	log.Printf("Lab Manager starting on %s", listenAddr)
+	if err := r.Run(listenAddr); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func getServers(c *gin.Context) {
-	servers, err := loadConfig()
+	config, err := loadConfig()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, servers)
+	c.JSON(http.StatusOK, config.Public())
 }
 
 func getServer(c *gin.Context) {
@@ -90,7 +116,7 @@ func getServer(c *gin.Context) {
 		return
 	}
 	
-	for _, server := range servers.Servers {
+	for _, server := range servers.Public().Servers {
 		if server.ID == id {
 			c.JSON(http.StatusOK, server)
 			return
@@ -111,9 +137,6 @@ func serverPower(c *gin.Context) {
 	
 	var jobs []*Job
 	var err error
-	
-	// Set transitional status immediately
-	cache.SetTransitionalStatus(id, req.Action)
 	
 	switch req.Action {
 	case "on":
@@ -141,15 +164,23 @@ func serverPower(c *gin.Context) {
 			return
 		}
 		
+		if !validIPMIActions[req.Action] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid action %q", req.Action)})
+			return
+		}
+		
 		description := fmt.Sprintf("IPMI %s %s", req.Action, server.Name)
 		job := jobQueue.AddJob(JobIPMI, id, req.Action, "", description)
 		jobs = []*Job{job}
 	}
 	
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
+	
+	// Show transitional status only once the sequence is actually queued
+	cache.SetTransitionalStatus(id, req.Action)
 	
 	c.JSON(http.StatusOK, gin.H{
 		"status": "queued",
@@ -164,14 +195,13 @@ func serverPower(c *gin.Context) {
 func serverReboot(c *gin.Context) {
 	id := c.Param("id")
 	
-	// Set transitional status immediately
-	cache.SetTransitionalStatus(id, "reboot")
-	
 	jobs, err := createRebootSequence(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
+	
+	cache.SetTransitionalStatus(id, "reboot")
 	
 	c.JSON(http.StatusOK, gin.H{
 		"status": "queued",
@@ -194,8 +224,8 @@ func serverIPMI(c *gin.Context) {
 	}
 	
 	// Validate action
-	if req.Action != "on" && req.Action != "off" && req.Action != "reboot" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid action. Must be 'on', 'off', or 'reboot'"})
+	if !validIPMIActions[req.Action] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid action. Must be one of on, off, reboot, graceful_shutdown, graceful_restart"})
 		return
 	}
 	
@@ -412,7 +442,21 @@ shell
 	// Create template variables
 	vars := createTemplateVars(server, mac, c)
 	
-	// Check if server has a custom next-path template
+	// 1. PRIORITY: Check for dynamic OS assignment first
+	if assignment, exists := osManager.GetServerOSAssignment(server.ID); exists {
+		if template, templateExists := osManager.GetTemplate(assignment.TemplateID); templateExists {
+			log.Printf("Using OS assignment %s for server %s (%s)", template.Name, server.ID, mac)
+			
+			bootScript := generateBootScriptFromTemplate(template, vars, server, mac)
+			c.Header("Content-Type", "text/plain")
+			c.String(http.StatusOK, bootScript)
+			return
+		} else {
+			log.Printf("Warning: OS template %s not found for server %s, falling back", assignment.TemplateID, server.ID)
+		}
+	}
+	
+	// 2. FALLBACK: Check static metadata (next-path)
 	nextPath := server.Metadata["next-path"]
 	if nextPath != "" {
 		// Process the next-path template
@@ -425,7 +469,7 @@ shell
 		// Generate chain loading script
 		bootScript := fmt.Sprintf(`#!ipxe
 
-echo Lab Manager - Booting %s
+echo Lab Manager - Booting %s (Static Config)
 echo MAC: %s
 echo Role: %s
 echo Hostname: %s
@@ -447,7 +491,7 @@ shell
 		return
 	}
 	
-	// Check if server has a custom boot template
+	// 3. FALLBACK: Check static metadata (boot-template)
 	bootTemplate := server.Metadata["boot-template"]
 	if bootTemplate != "" {
 		// Process custom boot template
@@ -462,10 +506,10 @@ shell
 		}
 	}
 	
-	// Default boot script template
+	// 4. DEFAULT: Local boot script
 	defaultTemplate := `#!ipxe
 
-echo Lab Manager - Booting {{.ServerName}}
+echo Lab Manager - Booting {{.ServerName}} (Default)
 echo MAC: {{.MAC}}
 echo Role: {{.Role}}
 echo Hostname: {{.Hostname}}
@@ -474,7 +518,7 @@ echo Incoming IP: {{.IncomingServerIP}}
 # Set hostname
 set hostname {{.Hostname}}
 
-# Boot from network or local disk based on configuration
+# Boot from local disk
 sanboot --no-describe --drive 0x80 ||
 
 echo Boot failed
@@ -499,6 +543,109 @@ shell
 	
 	c.Header("Content-Type", "text/plain")
 	c.String(http.StatusOK, bootScript)
+}
+
+// generateBootScriptFromTemplate generates an iPXE boot script from an OS template
+func generateBootScriptFromTemplate(template OSTemplate, vars iPXETemplateVars, server *Server, mac string) string {
+	switch template.BootMethod {
+	case "local":
+		// Local disk boot
+		return fmt.Sprintf(`#!ipxe
+
+echo Lab Manager - OS Template: %s
+echo Server: %s
+echo MAC: %s
+echo Booting from local disk
+
+# Boot from local disk
+sanboot --no-describe --drive 0x80 ||
+
+echo Boot failed
+shell
+`, template.Name, server.Name, mac)
+
+	case "chain":
+		// Chain loading to external URL
+		if template.NextPath == "" {
+			log.Printf("Chain template %s has no next-path", template.ID)
+			return generateLocalBootScript(server, mac, "Chain template misconfigured")
+		}
+		
+		// Process the next-path template
+		processedPath, err := processTemplate(template.NextPath, vars)
+		if err != nil {
+			log.Printf("Error processing chain template %s next-path: %v", template.ID, err)
+			processedPath = template.NextPath // Use unprocessed version as fallback
+		}
+		
+		return fmt.Sprintf(`#!ipxe
+
+echo Lab Manager - OS Template: %s
+echo Server: %s
+echo MAC: %s
+echo Role: %s
+echo Hostname: %s
+
+# Chain load to template URL
+echo Chaining to: %s
+chain %s ||
+
+echo Chain load failed, booting from local disk
+sanboot --no-describe --drive 0x80 ||
+
+echo Boot failed
+shell
+`, template.Name, server.Name, mac, server.Metadata["role"], vars.Hostname, processedPath, processedPath)
+
+	case "template":
+		// Custom iPXE template
+		if template.BootTemplate == "" {
+			log.Printf("Template %s has no boot-template", template.ID)
+			return generateLocalBootScript(server, mac, "Boot template empty")
+		}
+		
+		// Add template header
+		bootScript := fmt.Sprintf(`#!ipxe
+
+echo Lab Manager - OS Template: %s
+echo Server: %s
+echo MAC: %s
+echo Role: %s
+echo Hostname: %s
+
+# Custom template begins
+`, template.Name, server.Name, mac, server.Metadata["role"], vars.Hostname)
+		
+		// Process custom boot template
+		processedTemplate, err := processTemplate(template.BootTemplate, vars)
+		if err != nil {
+			log.Printf("Error processing boot template %s: %v", template.ID, err)
+			return generateLocalBootScript(server, mac, "Template processing failed")
+		}
+		
+		return bootScript + processedTemplate
+
+	default:
+		log.Printf("Unknown boot method %s for template %s", template.BootMethod, template.ID)
+		return generateLocalBootScript(server, mac, "Unknown boot method")
+	}
+}
+
+// generateLocalBootScript generates a fallback local boot script
+func generateLocalBootScript(server *Server, mac, reason string) string {
+	return fmt.Sprintf(`#!ipxe
+
+echo Lab Manager - Local Boot Fallback
+echo Server: %s
+echo MAC: %s
+echo Reason: %s
+
+# Boot from local disk
+sanboot --no-describe --drive 0x80 ||
+
+echo Boot failed
+shell
+`, server.Name, mac, reason)
 }
 
 func getAllServerStatus(c *gin.Context) {
@@ -625,6 +772,10 @@ func scheduleJob(c *gin.Context) {
 		jobs, err = createPowerOnSequenceScheduled(req.ServerID, scheduledTime)
 	default:
 		// For other actions, create a simple scheduled IPMI job
+		if !validIPMIActions[req.Action] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid action %q", req.Action)})
+			return
+		}
 		job := jobQueue.AddScheduledJob(JobIPMI, req.ServerID, req.Action, "", req.Description, scheduledTime)
 		jobs = []*Job{job}
 	}
@@ -639,4 +790,210 @@ func scheduleJob(c *gin.Context) {
 		"jobs": jobs,
 		"message": fmt.Sprintf("Scheduled %d job(s) for %s", len(jobs), scheduledTime.Format("2006-01-02 15:04:05")),
 	})
+}
+
+// OS Management API Handlers
+
+// getOSTemplates returns all OS templates
+func getOSTemplates(c *gin.Context) {
+	templates := osManager.GetAllTemplates()
+	c.JSON(http.StatusOK, gin.H{"templates": templates})
+}
+
+// getOSTemplate returns a specific OS template
+func getOSTemplate(c *gin.Context) {
+	templateID := c.Param("id")
+	template, exists := osManager.GetTemplate(templateID)
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Template not found"})
+		return
+	}
+	c.JSON(http.StatusOK, template)
+}
+
+// createOSTemplate creates a new OS template
+func createOSTemplate(c *gin.Context) {
+	var template OSTemplate
+	if err := c.ShouldBindJSON(&template); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	created, err := osManager.AddTemplate(template)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	// Save to persistent storage
+	saveOSData()
+	
+	c.JSON(http.StatusCreated, created)
+}
+
+// updateOSTemplate updates an existing OS template
+func updateOSTemplate(c *gin.Context) {
+	templateID := c.Param("id")
+	
+	var template OSTemplate
+	if err := c.ShouldBindJSON(&template); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	template.ID = templateID
+	if err := osManager.UpdateTemplate(template); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	// Save to persistent storage
+	saveOSData()
+	
+	c.JSON(http.StatusOK, template)
+}
+
+// deleteOSTemplate deletes an OS template
+func deleteOSTemplate(c *gin.Context) {
+	templateID := c.Param("id")
+	
+	if err := osManager.DeleteTemplate(templateID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	// Save to persistent storage
+	saveOSData()
+	
+	c.JSON(http.StatusOK, gin.H{"message": "Template deleted"})
+}
+
+// getServerOSAssignment returns the OS assignment for a server
+func getServerOSAssignment(c *gin.Context) {
+	serverID := c.Param("id")
+	
+	assignment, exists := osManager.GetServerOSAssignment(serverID)
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No OS assignment found"})
+		return
+	}
+	
+	// Also include template details
+	template, _ := osManager.GetTemplate(assignment.TemplateID)
+	c.JSON(http.StatusOK, gin.H{
+		"assignment": assignment,
+		"template": template,
+	})
+}
+
+// assignServerOS assigns an OS template to a server
+func assignServerOS(c *gin.Context) {
+	serverID := c.Param("id")
+	
+	var req struct {
+		TemplateID string `json:"template_id" binding:"required"`
+		AssignedBy string `json:"assigned_by,omitempty"`
+	}
+	
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	// Verify server exists
+	config, err := loadConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	
+	var serverExists bool
+	for _, server := range config.Servers {
+		if server.ID == serverID {
+			serverExists = true
+			break
+		}
+	}
+	
+	if !serverExists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Server not found"})
+		return
+	}
+	
+	if err := osManager.AssignOSToServer(serverID, req.TemplateID, req.AssignedBy); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	// Save to persistent storage
+	saveOSData()
+	
+	c.JSON(http.StatusOK, gin.H{"message": "OS assigned to server"})
+}
+
+// removeServerOSAssignment removes OS assignment from a server
+func removeServerOSAssignment(c *gin.Context) {
+	serverID := c.Param("id")
+	osManager.RemoveServerOSAssignment(serverID)
+	
+	// Save to persistent storage
+	saveOSData()
+	
+	c.JSON(http.StatusOK, gin.H{"message": "OS assignment removed"})
+}
+
+// bulkAssignOS assigns OS to multiple servers
+func bulkAssignOS(c *gin.Context) {
+	var req struct {
+		ServerIDs  []string `json:"server_ids" binding:"required"`
+		TemplateID string   `json:"template_id" binding:"required"`
+		AssignedBy string   `json:"assigned_by,omitempty"`
+	}
+	
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	if err := osManager.BulkAssignOS(req.ServerIDs, req.TemplateID, req.AssignedBy); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	
+	// Save to persistent storage
+	saveOSData()
+	
+	c.JSON(http.StatusOK, gin.H{
+		"message": fmt.Sprintf("OS assigned to %d servers", len(req.ServerIDs)),
+		"assigned_servers": len(req.ServerIDs),
+	})
+}
+
+// getAllOSAssignments returns all server OS assignments
+func getAllOSAssignments(c *gin.Context) {
+	assignments := osManager.GetAllAssignments()
+	
+	// Enrich with template details
+	enrichedAssignments := make([]gin.H, len(assignments))
+	for i, assignment := range assignments {
+		template, _ := osManager.GetTemplate(assignment.TemplateID)
+		enrichedAssignments[i] = gin.H{
+			"assignment": assignment,
+			"template": template,
+		}
+	}
+	
+	c.JSON(http.StatusOK, gin.H{"assignments": enrichedAssignments})
+}
+
+// osDataPath returns where OS templates/assignments persist: next to the config, e.g. servers.os.json
+func osDataPath() string {
+	return strings.TrimSuffix(configPath, filepath.Ext(configPath)) + ".os.json"
+}
+
+// saveOSData saves OS assignments to persistent storage
+func saveOSData() {
+	if err := osManager.SaveToFile(osDataPath()); err != nil {
+		log.Printf("Warning: Failed to save OS assignments to %s: %v", osDataPath(), err)
+	}
 }

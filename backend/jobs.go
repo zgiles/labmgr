@@ -82,15 +82,17 @@ func (jq *JobQueue) AddScheduledJob(jobType JobType, serverID, action, target, d
 		Type:        jobType,
 		ServerID:    serverID,
 		Action:      action,
-		Status:      "pending",
+		Status:      JobWaiting,
 		CreatedAt:   time.Now(),
 		NotBefore:   &notBefore,
 		Target:      target,
 		Description: description,
+		MaxRetries:  getMaxRetriesForJobType(jobType),
 	}
 	
 	jq.nextID++
 	jq.jobs[job.ID] = job
+	jq.queue = append(jq.queue, job)
 	return job
 }
 
@@ -209,19 +211,7 @@ func (jq *JobQueue) CancelJob(jobID string) error {
 		return fmt.Errorf("job already completed")
 	}
 	
-	// Remove from queue
-	for i, queuedJob := range jq.queue {
-		if queuedJob.ID == jobID {
-			jq.queue = append(jq.queue[:i], jq.queue[i+1:]...)
-			break
-		}
-	}
-	
-	// Mark as failed with cancellation message
-	job.Status = JobFailed
-	job.Error = "Cancelled by user"
-	now := time.Now()
-	job.CompletedAt = &now
+	jq.cancelLocked(job, "Cancelled by user")
 	
 	// Reset server status to pending if job was changing server state
 	if job.ServerID != "" && (job.Action == "on" || job.Action == "off" || job.Action == "reboot") {
@@ -230,6 +220,22 @@ func (jq *JobQueue) CancelJob(jobID string) error {
 	}
 	
 	return nil
+}
+
+// cancelLocked marks a job cancelled and cascades to jobs waiting on it,
+// so cancelling one step of a sequence doesn't let the later steps fire anyway.
+// Caller must hold jq.mu.
+func (jq *JobQueue) cancelLocked(job *Job, reason string) {
+	job.Status = JobFailed
+	job.Error = reason
+	now := time.Now()
+	job.CompletedAt = &now
+	
+	for _, other := range jq.jobs {
+		if other.DependsOn == job.ID && (other.Status == JobPending || other.Status == JobWaiting) {
+			jq.cancelLocked(other, fmt.Sprintf("Cancelled: depends on cancelled job %s", job.ID))
+		}
+	}
 }
 
 func (jq *JobQueue) RunJobNow(jobID string) error {
@@ -347,32 +353,70 @@ func startJobProcessor() {
 	}()
 }
 
+// jobHistoryRetention is how long finished jobs stay visible in the API
+const jobHistoryRetention = 24 * time.Hour
+
+// jobLane returns the key that serializes jobs: one job at a time per server (or per outlet for PDU-only jobs)
+func jobLane(job *Job) string {
+	if job.ServerID != "" {
+		return job.ServerID
+	}
+	return "pdu:" + job.Target
+}
+
 func (jq *JobQueue) processJobs() {
-	jq.mu.RLock()
+	jq.mu.Lock()
 	if !jq.running {
-		jq.mu.RUnlock()
+		jq.mu.Unlock()
 		return
 	}
 	
-	// Find next job to run
-	var jobToRun *Job
+	// Drop finished jobs from the run queue and note which lanes are busy
+	busy := make(map[string]bool)
+	remaining := jq.queue[:0]
 	for _, job := range jq.queue {
-		if (job.Status == JobPending || job.Status == JobWaiting) && jq.canRunJob(job) {
-			jobToRun = job
-			break
+		if job.Status == JobCompleted || job.Status == JobFailed {
+			continue
+		}
+		remaining = append(remaining, job)
+		if job.Status == JobRunning {
+			busy[jobLane(job)] = true
 		}
 	}
-	jq.mu.RUnlock()
+	jq.queue = remaining
 	
-	if jobToRun != nil {
-		jq.executeJob(jobToRun)
+	// Expire old job history
+	for id, job := range jq.jobs {
+		if job.CompletedAt != nil && time.Since(*job.CompletedAt) > jobHistoryRetention {
+			delete(jq.jobs, id)
+		}
+	}
+	
+	// Start every runnable job whose lane is free
+	var toRun []*Job
+	for _, job := range jq.queue {
+		if job.Status != JobPending && job.Status != JobWaiting {
+			continue
+		}
+		lane := jobLane(job)
+		if busy[lane] || !jq.canRunJob(job) {
+			continue
+		}
+		busy[lane] = true
+		now := time.Now()
+		job.Status = JobRunning
+		job.StartedAt = &now
+		toRun = append(toRun, job)
+	}
+	jq.mu.Unlock()
+	
+	for _, job := range toRun {
+		go jq.executeJob(job)
 	}
 }
 
 func (jq *JobQueue) executeJob(job *Job) {
 	log.Printf("Executing job %s: %s", job.ID, job.Description)
-	
-	jq.updateJobStatus(job.ID, JobRunning, nil)
 	
 	var err error
 	switch job.Type {

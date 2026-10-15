@@ -48,6 +48,21 @@ type PDU struct {
 	SNMPPort      int    `yaml:"snmp_port,omitempty" json:"snmp_port,omitempty"`           // Default: 161
 }
 
+// Public returns a copy of the config that is safe to send to clients: credentials are removed
+func (c *Config) Public() *Config {
+	public := &Config{Delays: c.Delays}
+	for _, server := range c.Servers {
+		server.IPMI.Password = ""
+		public.Servers = append(public.Servers, server)
+	}
+	for _, pdu := range c.PDUs {
+		pdu.Password = ""
+		pdu.SNMPCommunity = ""
+		public.PDUs = append(public.PDUs, pdu)
+	}
+	return public
+}
+
 func loadConfig() (*Config, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {

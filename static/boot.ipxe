@@ -10,11 +10,11 @@ set mac ${net0/mac}
 echo MAC Address: ${mac}
 
 # Use standard autoexec.ipxe endpoint (iPXE default)
-chain http://192.168.1.100:8098/api/v1/autoexec.ipxe?mac=${mac} ||
+chain /api/v1/autoexec.ipxe?mac=${mac} ||
 
 # Fallback to legacy endpoint
 echo Trying legacy boot endpoint...
-chain http://192.168.1.100:8098/api/v1/boot/${mac} ||
+chain /api/v1/boot/${mac} ||
 
 # Fallback to local boot if metadata service unavailable
 echo Lab Manager unavailable, booting from local disk

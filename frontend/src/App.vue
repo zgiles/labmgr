@@ -16,17 +16,28 @@
     
     <h1>Lab Manager</h1>
     
-    <!-- Header Controls -->
+    <!-- View Controls -->
     <div class="header-controls">
       <div class="view-controls">
         <div class="view-toggle">
-          <button @click="viewMode = 'grid'" :class="{ active: viewMode === 'grid' }">Grid</button>
-          <button @click="viewMode = 'table'" :class="{ active: viewMode === 'table' }">Table</button>
+          <button @click="viewMode = 'grid'" :class="{ active: viewMode === 'grid' }">🖥️ Grid</button>
+          <button @click="viewMode = 'table'" :class="{ active: viewMode === 'table' }">📋 Table</button>
+          <button @click="viewMode = 'os-management'" :class="{ active: viewMode === 'os-management' }">💿 OS Management</button>
         </div>
       </div>
-      <button class="btn btn-muted" @click="refreshAll" :disabled="refreshing || isDisabledDueToConnection()">
-        {{ refreshing ? 'Refreshing...' : isDisabledDueToConnection() ? 'Offline' : 'Refresh All' }}
-      </button>
+      <div v-if="viewMode !== 'os-management'" class="refresh-controls">
+        <button class="btn btn-muted" @click="refreshAll" :disabled="refreshing || isDisabledDueToConnection()">
+          {{ refreshing ? 'Refreshing...' : isDisabledDueToConnection() ? 'Offline' : 'Refresh All' }}
+        </button>
+      </div>
+      <div v-else class="os-management-controls">
+        <button class="btn btn-primary" @click="newTemplate">
+          + New Template
+        </button>
+        <button class="btn btn-muted" @click="loadOSData" :disabled="loading">
+          {{ loading ? 'Loading...' : 'Refresh' }}
+        </button>
+      </div>
     </div>
     
     <!-- Job Drawer Toggle -->
@@ -219,6 +230,45 @@
         </div>
       </div>
     </div>
+    
+    <!-- OS Management View -->
+    <div v-else-if="viewMode === 'os-management'" class="server-table">
+      <table>
+        <thead>
+          <tr>
+            <th class="name-header">Name</th>
+            <th class="status-header">Boot Method</th>
+            <th class="description-header">Description</th>
+            <th class="ip-header">Next Path / Template</th>
+            <th class="actions-header">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="template in osTemplates" :key="template.id" class="clickable-row" @click="editTemplate(template)">
+            <td class="name-cell">
+              <strong>{{ template.name }}</strong>
+              <div v-if="template.is_built_in" style="font-size:11px;color:#888;margin-top:2px;">built-in</div>
+            </td>
+            <td class="status-cell">
+              <div :class="['status-badge', 'status-' + template.boot_method]">{{ template.boot_method }}</div>
+            </td>
+            <td class="description-cell">{{ template.description }}</td>
+            <td class="ip-cell" style="font-family:monospace;font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              <span v-if="template.next_path" :title="template.next_path">{{ template.next_path }}</span>
+              <span v-else-if="template.boot_template" style="color:#666;font-style:italic;">inline template</span>
+              <span v-else style="color:#999;">—</span>
+            </td>
+            <td class="actions-cell">
+              <button class="btn btn-secondary" @click.stop="editTemplate(template)">Edit</button>
+              <button v-if="!template.is_built_in" class="btn btn-danger" @click.stop="deleteTemplate(template.id)">Delete</button>
+            </td>
+          </tr>
+          <tr v-if="osTemplates.length === 0">
+            <td colspan="5" style="text-align:center;color:#999;padding:32px;">No OS templates yet. Click + New Template to create one.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <!-- Server Details Modal -->
     <div v-if="selectedServer" class="modal-overlay" @click="closeServerModal">
@@ -297,10 +347,6 @@
               <div class="server-detail-label">Username:</div>
               <div class="server-detail-value code">{{ selectedServer.ipmi.username }}</div>
             </div>
-            <div class="server-detail">
-              <div class="server-detail-label">Password:</div>
-              <div class="server-detail-value code">{{ '•'.repeat(selectedServer.ipmi.password?.length || 0) }}</div>
-            </div>
             <div v-if="selectedServer.ipmi_error" class="server-detail">
               <div class="server-detail-label">Last Error:</div>
               <div class="server-detail-value error-text">{{ selectedServer.ipmi_error }}</div>
@@ -321,6 +367,61 @@
             <div v-if="selectedServer.pdu_error" class="server-detail">
               <div class="server-detail-label">Last Error:</div>
               <div class="server-detail-value error-text">{{ selectedServer.pdu_error }}</div>
+            </div>
+          </div>
+
+          <!-- OS Assignment -->
+          <div class="details-section">
+            <h3 class="details-section-title">OS Assignment</h3>
+            <div v-if="getServerOSAssignment(selectedServer.id)" class="server-detail">
+              <div class="server-detail-label">Assigned OS:</div>
+              <div class="server-detail-value">
+                <div class="assigned-os-info">
+                  <div class="os-name">{{ getServerOSAssignment(selectedServer.id).template.name }}</div>
+                  <div class="os-method">{{ getServerOSAssignment(selectedServer.id).template.boot_method }}</div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="server-detail">
+              <div class="server-detail-label">Assigned OS:</div>
+              <div class="server-detail-value">
+                <span class="no-os-assignment">Local Boot (Default)</span>
+              </div>
+            </div>
+            <div v-if="getServerOSAssignment(selectedServer.id)" class="server-detail">
+              <div class="server-detail-label">Template ID:</div>
+              <div class="server-detail-value code">{{ getServerOSAssignment(selectedServer.id).template.id }}</div>
+            </div>
+            <div v-if="getServerOSAssignment(selectedServer.id)" class="server-detail">
+              <div class="server-detail-label">Assigned:</div>
+              <div class="server-detail-value">{{ formatDate(getServerOSAssignment(selectedServer.id).assignment.assigned_at) }}</div>
+            </div>
+            <div v-if="getServerOSAssignment(selectedServer.id)" class="server-detail">
+              <div class="server-detail-label">Assigned By:</div>
+              <div class="server-detail-value">{{ getServerOSAssignment(selectedServer.id).assignment.assigned_by || 'System' }}</div>
+            </div>
+            <div class="server-detail">
+              <div class="server-detail-label">Quick Change:</div>
+              <div class="server-detail-value">
+                <select 
+                  class="os-select" 
+                  :value="getServerOSAssignment(selectedServer.id)?.assignment.template_id || ''" 
+                  @change="assignOSToServer(selectedServer.id, $event.target.value)"
+                >
+                  <option value="">Local Boot (Default)</option>
+                  <option 
+                    v-for="template in osTemplates" 
+                    :key="template.id" 
+                    :value="template.id"
+                  >
+                    {{ template.name }}
+                  </option>
+                </select>
+              </div>
+            </div>
+            <div v-if="getServerOSAssignment(selectedServer.id) && getServerOSAssignment(selectedServer.id).template.description" class="server-detail">
+              <div class="server-detail-label">Description:</div>
+              <div class="server-detail-value">{{ getServerOSAssignment(selectedServer.id).template.description }}</div>
             </div>
           </div>
 
@@ -362,11 +463,69 @@
       </div>
     </div>
 
+    <!-- OS Template Create/Edit Modal -->
+    <div v-if="showTemplateModal" class="modal-overlay" @click="closeTemplateModal">
+      <div class="modal-content" @click.stop style="max-width:600px;">
+        <div class="modal-header">
+          <div class="modal-title">{{ selectedTemplate && selectedTemplate.id ? 'Edit Template' : 'New OS Template' }}</div>
+          <button class="modal-close" @click="closeTemplateModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="details-section">
+            <div class="server-detail">
+              <div class="server-detail-label">Name</div>
+              <div class="server-detail-value">
+                <input type="text" v-model="templateForm.name" placeholder="e.g. NixOS Installer" style="width:100%;padding:6px 8px;border:1px solid #ced4da;border-radius:4px;font-size:14px;" />
+              </div>
+            </div>
+            <div class="server-detail">
+              <div class="server-detail-label">Description</div>
+              <div class="server-detail-value">
+                <input type="text" v-model="templateForm.description" placeholder="Short description" style="width:100%;padding:6px 8px;border:1px solid #ced4da;border-radius:4px;font-size:14px;" />
+              </div>
+            </div>
+            <div class="server-detail">
+              <div class="server-detail-label">Boot Method</div>
+              <div class="server-detail-value">
+                <select v-model="templateForm.boot_method" style="width:100%;padding:6px 8px;border:1px solid #ced4da;border-radius:4px;font-size:14px;">
+                  <option value="local">local — boot from local disk</option>
+                  <option value="chain">chain — chain-load a remote URL</option>
+                  <option value="template">template — custom iPXE script</option>
+                </select>
+              </div>
+            </div>
+            <div v-if="templateForm.boot_method === 'chain'" class="server-detail">
+              <div class="server-detail-label">Next Path / URL</div>
+              <div class="server-detail-value">
+                <input type="text" v-model="templateForm.next_path" placeholder="e.g. http://&#123;&#123;.IncomingServerIP&#125;&#125;/nixos/boot.ipxe" style="width:100%;padding:6px 8px;border:1px solid #ced4da;border-radius:4px;font-size:14px;font-family:monospace;" />
+                <div style="font-size:11px;color:#666;margin-top:4px;" v-pre>Variables: {{.MAC}}, {{.Hostname}}, {{.Role}}, {{.IncomingServerIP}}</div>
+              </div>
+            </div>
+            <div v-if="templateForm.boot_method === 'template'" class="server-detail">
+              <div class="server-detail-label">Boot Template (iPXE)</div>
+              <div class="server-detail-value">
+                <textarea v-model="templateForm.boot_template" rows="8" placeholder="#!ipxe" style="width:100%;padding:6px 8px;border:1px solid #ced4da;border-radius:4px;font-size:13px;font-family:monospace;resize:vertical;"></textarea>
+                <div style="font-size:11px;color:#666;margin-top:4px;" v-pre>Variables: {{.MAC}}, {{.Hostname}}, {{.Role}}, {{.IncomingServerIP}}</div>
+              </div>
+            </div>
+          </div>
+          <div v-if="templateFormError" style="color:#dc3545;margin-top:8px;font-size:14px;">{{ templateFormError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="closeTemplateModal">Cancel</button>
+          <button class="btn btn-primary" @click="saveTemplate" :disabled="templateFormSaving">
+            {{ templateFormSaving ? 'Saving...' : 'Save Template' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading State -->
     <div v-if="loading" style="text-align: center; padding: 40px;">
       Loading servers...
     </div>
     
-    <!-- Grid View -->
+    <!-- Server Views -->
     <div v-else-if="viewMode === 'grid'" class="server-grid">
       <div v-for="server in servers" :key="server.id" class="server-card" :data-server-id="server.id" @click="openServerDetails(server)">
         <div class="server-header">
@@ -526,7 +685,7 @@
     </div>
     
     <!-- Table View -->
-    <div v-else class="server-table">
+    <div v-else-if="viewMode === 'table'" class="server-table">
       <table>
         <thead>
           <tr>
@@ -776,6 +935,16 @@ export default {
       lastSuccessfulCall: Date.now(),
       openMenus: {}, // Track which server menus are open
       pendingRequests: new Set(), // Track pending API requests
+      
+      // OS Management
+      osTemplates: [],
+      osAssignments: [],
+      showTemplateModal: false,
+      showBulkAssignModal: false,
+      selectedTemplate: null,
+      templateForm: { name: '', description: '', boot_method: 'chain', next_path: '', boot_template: '' },
+      templateFormError: '',
+      templateFormSaving: false,
       retryTimeout: null, // Track active retry timeout
       pollingPaused: false, // Prevent polling floods
       mobileBottomSheet: {
@@ -791,6 +960,9 @@ export default {
     this.startStatusPolling()
     this.startJobPolling() // This now handles both jobs and server job grouping
     this.startConnectionMonitoring() // Monitor connection health
+    
+    // Load OS management data
+    await this.loadOSData()
     
     // Close menus when clicking outside
     document.addEventListener('click', (event) => {
@@ -861,7 +1033,7 @@ export default {
         console.error(`Failed to ${action} server:`, error)
         // Only show alert if it's not a connection issue (which shows status bar)
         if (this.connectionStatus === 'connected') {
-          alert(`Failed to ${action} server. Please try again.`)
+          alert(`Failed to ${action} server: ${this.errorMessage(error)}`)
         }
         // Re-enable on error
         this.serverDisabled[serverId] = false
@@ -1261,34 +1433,6 @@ export default {
         return `${remaining}s`
       }
       return ''
-    },
-    
-    setTransitionalStatus(serverId, action) {
-      const serverIndex = this.servers.findIndex(s => s.id === serverId)
-      if (serverIndex !== -1) {
-        let transitionalStatus
-        switch (action) {
-          case 'on':
-            transitionalStatus = 'Powering On...'
-            break
-          case 'off':
-            transitionalStatus = 'Powering Off...'
-            break
-          case 'reboot':
-            transitionalStatus = 'Rebooting...'
-            break
-          default:
-            transitionalStatus = 'Pending...'
-        }
-        
-        const updatedServer = {
-          ...this.servers[serverIndex],
-          status: transitionalStatus,
-          _statusUpdateTime: Date.now()
-        }
-        
-        this.servers.splice(serverIndex, 1, updatedServer)
-      }
     },
     
     // Job Drawer Methods
@@ -1697,6 +1841,17 @@ export default {
       }
     },
     
+    // JSON request through the connection-aware wrapper; resolves to the response body
+    async request(method, url, data) {
+      const response = await this.apiCall(() => axios({ method, url, data }))
+      return response.data
+    },
+
+    // Best human-readable message from an API error
+    errorMessage(error) {
+      return error?.response?.data?.error || error?.message || 'Unknown error'
+    },
+
     // Check if actions should be disabled due to connection
     isDisabledDueToConnection() {
       return this.connectionStatus === 'disconnected' || this.connectionStatus === 'reconnecting'
@@ -1948,6 +2103,139 @@ export default {
         
         return text + parts.join(', ')
       }
+    },
+    
+    // OS Management Methods
+    async loadOSData() {
+      try {
+        // Load templates and assignments in parallel
+        const [templatesResponse, assignmentsResponse] = await Promise.all([
+          this.request('get', '/api/v1/os/templates'),
+          this.request('get', '/api/v1/os/assignments')
+        ])
+        
+        this.osTemplates = templatesResponse.templates || []
+        this.osAssignments = assignmentsResponse.assignments || []
+        
+      } catch (error) {
+        console.error('Failed to load OS data:', error)
+      }
+    },
+    
+    getServerOSAssignment(serverId) {
+      return this.osAssignments.find(assignment => 
+        assignment.assignment.server_id === serverId
+      )
+    },
+    
+    async assignOSToServer(serverId, templateId) {
+      try {
+        if (templateId === '') {
+          // Remove assignment (revert to local boot)
+          await this.request('delete', `/api/v1/servers/${serverId}/os`)
+        } else {
+          // Assign new template
+          await this.request('put', `/api/v1/servers/${serverId}/os`, {
+            template_id: templateId,
+            assigned_by: 'Web UI'
+          })
+        }
+        
+        // Reload assignments
+        await this.loadOSData()
+        
+      } catch (error) {
+        console.error('Failed to assign OS:', error)
+        alert('Failed to assign OS: ' + this.errorMessage(error))
+      }
+    },
+    
+    async deleteTemplate(templateId) {
+      if (!confirm('Are you sure you want to delete this template?')) {
+        return
+      }
+      
+      try {
+        await this.request('delete', `/api/v1/os/templates/${templateId}`)
+        
+        // Reload templates
+        await this.loadOSData()
+        
+      } catch (error) {
+        console.error('Failed to delete template:', error)
+        alert('Failed to delete template: ' + this.errorMessage(error))
+      }
+    },
+    
+    newTemplate() {
+      this.selectedTemplate = null
+      this.templateForm = { name: '', description: '', boot_method: 'chain', next_path: '', boot_template: '' }
+      this.templateFormError = ''
+      this.showTemplateModal = true
+    },
+
+    editTemplate(template) {
+      this.selectedTemplate = { ...template }
+      this.templateForm = {
+        name: template.name,
+        description: template.description || '',
+        boot_method: template.boot_method,
+        next_path: template.next_path || '',
+        boot_template: template.boot_template || '',
+      }
+      this.templateFormError = ''
+      this.showTemplateModal = true
+    },
+
+    closeTemplateModal() {
+      this.showTemplateModal = false
+      this.selectedTemplate = null
+      this.templateFormError = ''
+    },
+
+    async saveTemplate() {
+      if (!this.templateForm.name.trim()) {
+        this.templateFormError = 'Name is required.'
+        return
+      }
+      if (this.templateForm.boot_method === 'chain' && !this.templateForm.next_path.trim()) {
+        this.templateFormError = 'Next Path is required for chain boot method.'
+        return
+      }
+      if (this.templateForm.boot_method === 'template' && !this.templateForm.boot_template.trim()) {
+        this.templateFormError = 'Boot Template is required for template boot method.'
+        return
+      }
+
+      this.templateFormSaving = true
+      this.templateFormError = ''
+
+      try {
+        const body = {
+          name: this.templateForm.name.trim(),
+          description: this.templateForm.description.trim(),
+          boot_method: this.templateForm.boot_method,
+          next_path: this.templateForm.next_path.trim(),
+          boot_template: this.templateForm.boot_template.trim(),
+        }
+
+        if (this.selectedTemplate && this.selectedTemplate.id) {
+          await this.request('put', `/api/v1/os/templates/${this.selectedTemplate.id}`, body)
+        } else {
+          await this.request('post', '/api/v1/os/templates', body)
+        }
+
+        await this.loadOSData()
+        this.closeTemplateModal()
+      } catch (error) {
+        this.templateFormError = 'Failed to save: ' + this.errorMessage(error)
+      } finally {
+        this.templateFormSaving = false
+      }
+    },
+
+    viewTemplateDetails(template) {
+      this.editTemplate(template)
     }
   }
 }

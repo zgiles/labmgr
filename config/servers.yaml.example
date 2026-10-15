@@ -1,0 +1,121 @@
+# Lab Manager Configuration Example
+# Copy to servers.yaml and customize for your environment
+
+servers:
+  # Example 1: IPMI + PDU Device (Recommended for servers)
+  # - Powers on PDU outlets first, then IPMI
+  # - Powers off IPMI first, then PDU outlets
+  # - Uses IPMI status primarily, PDU as fallback
+  - id: "server-01"
+    name: "Lab Server 01" 
+    description: "Main compute server"
+    ipmi:
+      host: "192.168.1.101"        # BMC/iDRAC/iLO IP address
+      username: "admin"            # IPMI username
+      password: "password"         # IPMI password
+    pdu_outlets: ["pdu-01:1", "pdu-01:2"]  # PDU outlets for this server
+    metadata:
+      hostname: "lab-server-01"
+      role: "compute"              # Used for filtering/automation
+      datacenter: "lab"
+      mac: "aa:bb:cc:dd:ee:01"    # For iPXE boot script matching
+
+  # Example 2: IPMI-Only Device
+  # - Direct IPMI power control
+  # - No PDU dependency
+  - id: "compute-02"
+    name: "Compute Node 02"
+    description: "Cloud VM or IPMI-only server"
+    ipmi:
+      host: "192.168.1.102"
+      username: "admin"
+      password: "password"
+    # No pdu_outlets defined - IPMI only
+    metadata:
+      hostname: "compute-02"
+      role: "compute"
+
+  # Example 3: PDU-Only Device  
+  # - Network equipment, switches, legacy hardware
+  # - Direct PDU power control only
+  # - PDU outlet status monitoring
+  - id: "switch-01"
+    name: "Network Switch" 
+    description: "Main lab switch"
+    ipmi:
+      host: ""                    # Empty - no IPMI
+      username: ""
+      password: ""
+    pdu_outlets: ["pdu-01:8"]     # PDU outlet only
+    metadata:
+      hostname: "switch-01"
+      role: "network"
+      
+  # Example 4: InfiniBand Switch
+  - id: "ib-switch"
+    name: "InfiniBand Switch"
+    description: "High-speed interconnect"
+    ipmi:
+      host: ""
+      username: ""
+      password: ""
+    pdu_outlets: ["pdu-01:16"]
+    metadata:
+      role: "network"
+      type: "infiniband"
+
+pdus:
+  # Example: APC AP8641 or similar SNMP-capable PDU
+  - id: "pdu-01"
+    name: "Main PDU (AP8641)"
+    host: "192.168.1.200"         # PDU IP address
+    username: "apc"               # HTTP username (fallback method)
+    password: "apc"               # HTTP password (fallback method)
+    type: "apc"                   # "apc" uses SNMP, others use HTTP
+    snmp_community: "private"     # SNMP write community string
+    snmp_version: "v1"            # "v1", "v2c", or "v3"
+    snmp_port: 161                # SNMP port (default: 161)
+
+  # Example: Legacy HTTP-only PDU
+  - id: "pdu-02"  
+    name: "Legacy PDU"
+    host: "192.168.1.201"
+    username: "admin"
+    password: "admin"
+    type: "legacy"                # Non-APC PDUs use HTTP
+
+# Power operation timing delays (seconds)
+delays:
+  pdu_to_power_on_seconds: 120   # Wait from PDU power-on to IPMI power-on
+  power_off_to_pdu_seconds: 10   # Wait from IPMI power-off to PDU power-off  
+  between_ipmi_seconds: 10       # Delay between IPMI operations
+  between_pdu_seconds: 5         # Delay between PDU outlet operations
+
+# Configuration Notes:
+#
+# 1. Device Types:
+#    - IPMI+PDU: Both ipmi.host and pdu_outlets configured
+#    - IPMI-only: Only ipmi.host configured  
+#    - PDU-only: Only pdu_outlets configured (leave ipmi.host empty)
+#
+# 2. Power Sequencing:
+#    - IPMI+PDU devices use intelligent sequencing with delays
+#    - Single-type devices use direct control
+#
+# 3. PDU Outlet Format:
+#    - Format: "pdu-id:outlet-number"
+#    - Example: "pdu-01:8" = PDU pdu-01, outlet 8
+#
+# 4. SNMP vs HTTP:
+#    - APC PDUs: Use SNMP (type: "apc") - Recommended
+#    - Other PDUs: Use HTTP (type: anything else)
+#
+# 5. Security:
+#    - Store this file with restricted permissions (600)
+#    - Use dedicated service accounts
+#    - Change default passwords
+#
+# 6. Metadata:
+#    - Used for iPXE boot script generation
+#    - Available for API filtering and automation
+#    - Customize fields as needed for your environment

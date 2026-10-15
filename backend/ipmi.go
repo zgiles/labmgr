@@ -11,7 +11,20 @@ import (
 	"github.com/stmcginnis/gofish/redfish"
 )
 
+// validIPMIActions are the actions performIPMIAction understands
+var validIPMIActions = map[string]bool{
+	"on":                true,
+	"off":               true,
+	"reboot":            true,
+	"graceful_shutdown": true,
+	"graceful_restart":  true,
+}
+
 func performIPMIAction(serverID, action string) error {
+	if !validIPMIActions[action] {
+		return fmt.Errorf("unknown action: %s", action)
+	}
+
 	config, err := loadConfig()
 	if err != nil {
 		return err
@@ -36,7 +49,11 @@ func performIPMIAction(serverID, action string) error {
 		Insecure: true,
 	}
 
-	c, err := gofish.Connect(clientConfig)
+	// Bound the whole action so a hung BMC can't stall the job processor
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	c, err := gofish.ConnectContext(ctx, clientConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to IPMI: %v", err)
 	}

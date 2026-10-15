@@ -20,6 +20,9 @@
         .status-powered { background: #fff3cd; color: #856404; }  /* Yellow for powered but system unreachable */
         .status-off { background: #f8d7da; color: #721c24; }
         .status-unknown { background: #e2e3e5; color: #383d41; }
+        .status-chain { background: #cce5ff; color: #004085; }
+        .status-template { background: #d4edda; color: #155724; }
+        .status-local { background: #e2e3e5; color: #383d41; }
         .status-transitional { background: #fff3cd; color: #856404; animation: pulse 1.5s ease-in-out infinite alternate; }
         @keyframes pulse { from { opacity: 0.7; } to { opacity: 1; } }
         .server-info { margin-bottom: 15px; }
@@ -92,6 +95,12 @@
         .code { font-family: monospace; background: #f8f9fa; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
         .status-good { color: #28a745; font-weight: 600; }
         .status-bad { color: #dc3545; font-weight: 600; }
+        
+        /* OS Assignment in Server Details Modal */
+        .assigned-os-info { display: flex; flex-direction: column; gap: 2px; }
+        .assigned-os-info .os-name { font-weight: 500; color: #333; }
+        .assigned-os-info .os-method { font-size: 11px; color: #666; text-transform: uppercase; }
+        .no-os-assignment { color: #666; font-style: italic; }
         .outlet-item { margin: 2px 0; }
         .jobs-list { max-height: 300px; overflow-y: auto; }
         .job-item-details { padding: 8px 12px; margin: 4px 0; border-radius: 4px; cursor: pointer; border: 1px solid #eee; transition: all 0.2s; }
@@ -356,6 +365,60 @@
           .error-indicator:hover {
             opacity: 1;
             transform: scale(1.1);
+          }
+          
+          /* OS Management View */
+          .os-management-view { margin-top: 20px; }
+          .os-management-controls { display: flex; gap: 10px; }
+          
+          .os-templates-section, .os-assignments-section { margin-bottom: 40px; }
+          .os-templates-section h2, .os-assignments-section h2 { color: #333; margin-bottom: 20px; padding-bottom: 8px; border-bottom: 2px solid #007bff; }
+          
+          .template-grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); }
+          .template-card { background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); transition: box-shadow 0.2s; }
+          .template-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+          .template-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+          .template-name { font-size: 16px; font-weight: 600; color: #333; }
+          .template-method { padding: 4px 8px; background: #e9ecef; color: #495057; border-radius: 4px; font-size: 12px; text-transform: uppercase; font-weight: 500; }
+          .template-description { color: #666; margin-bottom: 15px; font-size: 14px; }
+          .template-details { margin-bottom: 15px; }
+          .template-detail { display: flex; justify-content: space-between; margin-bottom: 5px; }
+          .detail-label { font-size: 12px; color: #666; font-weight: 500; }
+          .detail-value { font-size: 12px; color: #333; }
+          .template-actions { display: flex; gap: 8px; }
+          .btn-sm { padding: 4px 8px; font-size: 12px; }
+          
+          .assignments-table-container { background: white; border-radius: 8px; overflow: visible; box-shadow: 0 2px 10px rgba(0,0,0,0.1); position: relative; z-index: 1; }
+          .assignments-table { width: 100%; border-collapse: collapse; }
+          .assignments-table th { background: #f8f9fa; padding: 8px 12px; text-align: left; font-weight: 600; color: #495057; border-bottom: 1px solid #dee2e6; font-size: 14px; }
+          .assignments-table td { padding: 8px 12px; border-bottom: 1px solid #f1f3f4; font-size: 14px; }
+          .assignments-table tr:hover { background: #f8f9fa; }
+          .assignments-table .clickable-row { cursor: pointer; transition: background-color 0.2s ease; }
+          .assignments-table .clickable-row:hover { background: #e9ecef; }
+          
+          .assignments-table .server-name-cell { }
+          .assignments-table .server-name-cell strong { color: #333; font-size: 14px; }
+          .assignments-table .server-id { font-size: 12px; color: #666; margin-top: 2px; }
+          
+          .assignments-table .os-assignment-cell { display: flex; align-items: center; gap: 8px; }
+          .assignments-table .assigned-os .os-name { font-weight: 500; color: #333; }
+          .assignments-table .assigned-os .os-method { font-size: 11px; color: #666; text-transform: uppercase; margin-top: 2px; }
+          .assignments-table .no-assignment .default-boot { color: #666; font-style: italic; }
+          .assignments-table .status-cell { display: flex; align-items: center; gap: 8px; }
+          
+          .assignments-table .assigned-date-cell, .assignments-table .assigned-by-cell { font-size: 13px; color: #666; }
+          .assignments-table .no-date, .assignments-table .no-assignee { color: #999; font-style: italic; }
+          
+          .assignments-table .os-select { padding: 4px 8px; border: 1px solid #ced4da; border-radius: 4px; font-size: 12px; background: white; cursor: pointer; min-width: 160px; }
+          .assignments-table .os-select:focus { outline: none; border-color: #007bff; box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25); }
+          .assignments-table .assignment-actions-cell { min-width: 180px; }
+          
+          @media (max-width: 768px) {
+            .template-grid { grid-template-columns: 1fr; }
+            .section-header { flex-direction: column; gap: 15px; align-items: stretch; }
+            .os-management-controls { justify-content: center; }
+            .assignments-table-container { overflow-x: auto; }
+            .assignments-table { min-width: 600px; }
           }
         }
     </style>

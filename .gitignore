@@ -3,6 +3,7 @@ config/servers.yaml
 config/production.yaml
 config/prod.yaml
 config/*.prod.yaml
+config/*.os.json
 *.conf
 *.config
 
