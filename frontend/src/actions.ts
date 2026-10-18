@@ -1,7 +1,8 @@
 import { isBusy, isOff, isOn } from './format'
-import { runOperation, toast } from './store'
+import { api } from './api'
+import { errorText, runOperation, toast } from './store'
 import type { OpRequest, Server } from './types'
-import { confirmAction, openDialog } from './ui'
+import { confirmAction, openDialog, openServer } from './ui'
 
 export interface ActionItem {
   label: string
@@ -47,6 +48,28 @@ export function powerOff(server: Server) {
     { kind: 'power_off' },
     { title: `Power off ${server.name}?`, body: powerOffBody(server), confirmLabel: `Power off ${server.name}` },
   )
+}
+
+/**
+ * Opens the BMC's graphical console in a new tab. The tab is opened during the click
+ * (so pop-up blockers allow it) and pointed at the launch URL once the BMC answers;
+ * on Dell that URL carries a one-time login, so it opens straight into the console.
+ */
+export async function openKVM(server: Server) {
+  const tab = window.open('', '_blank')
+  try {
+    const launch = await api.kvm(server.id)
+    if (tab) {
+      tab.opener = null
+      tab.location.href = launch.url
+    } else {
+      window.open(launch.url, '_blank', 'noopener')
+    }
+    if (launch.note) toast(launch.note)
+  } catch (e) {
+    tab?.close()
+    toast(`Couldn't open the console: ${errorText(e)}`, 'error')
+  }
 }
 
 export function serverActions(server: Server): ActionGroup[] {
@@ -147,6 +170,16 @@ export function serverActions(server: Server): ActionGroup[] {
           run: () => run(server, { kind: 'boot_override', target: 'bios' }, undefined, `${server.name} will enter BIOS setup next time`),
         },
         { label: 'Reinstall…', disabled: busy, run: () => openDialog({ type: 'reinstall', serverId: server.id }) },
+      ],
+    })
+  }
+
+  if (server.has_bmc) {
+    groups.push({
+      label: 'Console',
+      items: [
+        { label: 'Graphical console (KVM)', disabled: !bmcUp, run: () => openKVM(server) },
+        { label: 'Serial console', run: () => openServer(server.id, 'console') },
       ],
     })
   }

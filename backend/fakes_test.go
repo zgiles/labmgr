@@ -156,6 +156,10 @@ func (b *fakeBMC) Info(ctx context.Context) (BMCInfo, error) {
 	return BMCInfo{Manufacturer: "Dell Inc.", Model: "Fake"}, nil
 }
 
+func (b *fakeBMC) KVM(ctx context.Context) (KVMLaunch, error) {
+	return KVMLaunch{URL: "https://bmc.example/console?tempPassword=one-time", Kind: "direct"}, nil
+}
+
 func (b *fakeBMC) Logs(ctx context.Context, limit int) ([]BMCLogEntry, error) { return nil, nil }
 
 type fakePDU struct {

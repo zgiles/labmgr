@@ -4,6 +4,7 @@ import { api } from '../api'
 import { dateTime, relativeTime } from '../format'
 import { errorText, operationsFor, toast } from '../store'
 import type { BMCDetails, Operation, Server } from '../types'
+import { openKVM } from '../actions'
 import { setTab } from '../ui'
 import Icon from './Icon.vue'
 import StepTrack from './StepTrack.vue'
@@ -100,6 +101,9 @@ const metadata = computed(() =>
               {{ server.bmc_host }} <Icon name="external" :size="12" />
             </a>
             <div v-if="server.state.bmc === 'ok'" class="sub ok">Responding · checked {{ relativeTime(server.state.bmc_checked_at) }}</div>
+            <button v-if="server.state.bmc === 'ok'" class="btn btn-sm kvm" @click="openKVM(server)">
+              <Icon name="terminal" :size="14" /> Open graphical console
+            </button>
             <div v-else-if="server.state.bmc === 'unreachable'" class="sub bad">{{ server.state.bmc_error ?? 'Not responding' }}</div>
           </dd>
         </template>
@@ -231,6 +235,9 @@ const metadata = computed(() =>
 }
 .bad {
   color: var(--danger-text);
+}
+.kvm {
+  margin-top: 8px;
 }
 .outlet {
   display: flex;

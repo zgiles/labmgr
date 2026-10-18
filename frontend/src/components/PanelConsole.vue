@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { openKVM } from '../actions'
 import type { Server } from '../types'
 import Icon from './Icon.vue'
 
@@ -125,9 +126,9 @@ onBeforeUnmount(() => {
       <div class="tools">
         <button v-if="status === 'closed'" class="btn btn-sm btn-primary" @click="connect">Reconnect</button>
         <a class="btn btn-sm btn-ghost" :href="`/api/v2/servers/${encodeURIComponent(server.id)}/console/log`" download>Download log</a>
-        <a v-if="server.console.web_url" class="btn btn-sm btn-ghost" :href="server.console.web_url" target="_blank" rel="noopener">
+        <button class="btn btn-sm" :disabled="server.state.bmc !== 'ok'" @click="openKVM(server)">
           Graphical console <Icon name="external" :size="12" />
-        </a>
+        </button>
       </div>
     </div>
     <div ref="host" class="term" />

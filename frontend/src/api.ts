@@ -57,6 +57,8 @@ export const api = {
 
   bootScript: (serverId: string) => request<BootScript>('GET', v2(`/servers/${id(serverId)}/boot-script`)),
   bmc: (serverId: string) => request<BMCDetails>('GET', v2(`/servers/${id(serverId)}/bmc`)),
+  kvm: (serverId: string) =>
+    request<{ url: string; kind: 'direct' | 'login'; note?: string }>('POST', v2(`/servers/${id(serverId)}/kvm`)),
   bmcLogs: (serverId: string, limit = 50) =>
     request<BMCLogEntry[]>('GET', v2(`/servers/${id(serverId)}/bmc/logs?limit=${limit}`)),
 

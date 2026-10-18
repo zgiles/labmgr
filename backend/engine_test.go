@@ -411,3 +411,27 @@ func TestBootstrapScriptChainsWithAbsoluteURL(t *testing.T) {
 		t.Errorf("bootstrap script:\n%s", rec.Body)
 	}
 }
+
+func TestKVMLaunchIsNotCachedAndIsRecorded(t *testing.T) {
+	app, _ := newTestApp(t)
+	rec := httptest.NewRecorder()
+	app.router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/servers/bmconly/kvm", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"kind":"direct"`) {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Error("launch URL may carry a one-time credential; it must not be cached")
+	}
+	events, _ := app.store.Events("bmconly", 5)
+	if len(events) == 0 || strings.Contains(events[0].Message, "one-time") {
+		t.Errorf("event missing or leaks the URL: %+v", events)
+	}
+}
+
+func TestIDRACConsoleURLMatchesDellsLauncher(t *testing.T) {
+	got := idracConsoleURL("https://10.0.0.5", "root", "tmpUser1", "aB+c/d=e")
+	want := "https://10.0.0.5/console?username=root&tempUsername=tmpUser1&tempPassword=aB+c/d=e"
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}

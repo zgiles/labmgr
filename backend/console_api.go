@@ -115,3 +115,22 @@ func (a *App) v2ConsoleLog(c *gin.Context) {
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", data)
 }
+
+// v2KVM returns a launch URL for the server's graphical console. The URL can carry a
+// one-time credential, so it goes only to the requesting browser: never logged or stored.
+func (a *App) v2KVM(c *gin.Context) {
+	bmc, ok := a.bmcForRequest(c)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	launch, err := bmc.KVM(ctx)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	a.recordEvent(&Event{ServerID: c.Param("id"), Kind: "console", Message: "Opened the graphical console", Actor: requester(c, ""), Level: "info"})
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, launch)
+}

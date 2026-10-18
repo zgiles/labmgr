@@ -75,6 +75,13 @@ type BMCInfo struct {
 	GraphicalKVM bool   `json:"graphical_kvm"`
 }
 
+// KVMLaunch is how to open a server's graphical console in a browser
+type KVMLaunch struct {
+	URL  string `json:"url"`
+	Kind string `json:"kind"` // "direct": opens the console with a one-time credential; "login": BMC login page
+	Note string `json:"note,omitempty"`
+}
+
 // BMC controls one server's baseboard management controller
 type BMC interface {
 	PowerState(ctx context.Context) (PowerState, error)
@@ -83,6 +90,7 @@ type BMC interface {
 	SetBootOverride(ctx context.Context, target string, persistent bool) error
 	Info(ctx context.Context) (BMCInfo, error)
 	Logs(ctx context.Context, limit int) ([]BMCLogEntry, error)
+	KVM(ctx context.Context) (KVMLaunch, error)
 }
 
 // PDUDriver controls one PDU's outlets

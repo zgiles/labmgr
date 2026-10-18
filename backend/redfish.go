@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/stmcginnis/gofish"
 	"github.com/stmcginnis/gofish/schemas"
@@ -174,7 +176,7 @@ func (b *redfishBMC) Info(ctx context.Context) (BMCInfo, error) {
 
 // Logs returns the most recent entries from the BMC's event logs, newest first
 func (b *redfishBMC) Logs(ctx context.Context, limit int) ([]BMCLogEntry, error) {
-	var entries []BMCLogEntry
+	entries := []BMCLogEntry{}
 	err := b.withSystem(ctx, func(c *gofish.APIClient, system *schemas.ComputerSystem) error {
 		var services []*schemas.LogService
 		if managers, err := c.Service.Managers(); err == nil && len(managers) > 0 {
@@ -187,27 +189,38 @@ func (b *redfishBMC) Logs(ctx context.Context, limit int) ([]BMCLogEntry, error)
 		}
 
 		for _, service := range services {
-			// Event logs are what people want here; skip audit/debug/crash-dump services
+			// Hardware event logs are what people want here; names vary by vendor
+			// (iDRAC Sel/Lclog/FaultList, XCC StandardLog/ActiveLog), so skip the
+			// known non-event services rather than guess every event log's name
 			id := strings.ToLower(service.ID)
-			if !strings.Contains(id, "sel") && !strings.Contains(id, "event") && !strings.Contains(id, "lclog") && !strings.Contains(id, "platform") {
+			if strings.Contains(id, "audit") || strings.Contains(id, "maint") || strings.Contains(id, "debug") ||
+				strings.Contains(id, "dump") || strings.Contains(id, "crash") {
 				continue
 			}
-			// Bound the fetch: lifecycle logs can hold thousands of entries
-			logEntries, err := service.FilteredEntries(schemas.WithTop(200))
+			logEntries, err := fetchLogEntries(ctx, c, service.ODataID+"/Entries", 200)
 			if err != nil {
-				if logEntries, err = service.Entries(); err != nil {
-					continue
-				}
+				continue
 			}
 			for _, e := range logEntries {
 				if isLogNoise(e.Message) {
 					continue
 				}
-				entries = append(entries, BMCLogEntry{Created: e.Created, Severity: string(e.Severity), Message: e.Message})
+				entries = append(entries, e)
 			}
 		}
 		return nil
 	})
+	// iDRAC records many events in both its SEL and lifecycle log
+	seen := make(map[string]bool)
+	unique := entries[:0]
+	for _, e := range entries {
+		key := e.Created + "|" + e.Message
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, e)
+		}
+	}
+	entries = unique
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Created > entries[j].Created })
 	if limit > 0 && len(entries) > limit {
 		entries = entries[:limit]
@@ -223,4 +236,115 @@ func isLogNoise(message string) bool {
 		strings.Contains(m, "logged off") ||
 		strings.Contains(m, "previous log entry was repeated") ||
 		strings.Contains(m, "login success")
+}
+
+type rawLogEntry struct {
+	ODataID  string `json:"@odata.id"`
+	Created  string `json:"Created"`
+	Severity string `json:"Severity"`
+	Message  string `json:"Message"`
+}
+
+// fetchLogEntries reads up to top entries of a log collection. Some BMCs (iDRAC) return
+// entries inline; others (XCC) return only links, which gofish would fetch one by one
+// serially. Links are fetched here a few at a time instead.
+func fetchLogEntries(ctx context.Context, c *gofish.APIClient, uri string, top int) ([]BMCLogEntry, error) {
+	getJSON := func(url string, into any) error {
+		resp, err := c.Get(url)
+		if err != nil {
+			return err
+		}
+		defer schemas.DeferredCleanupHTTPResponse(resp)
+		return json.NewDecoder(resp.Body).Decode(into)
+	}
+
+	var collection struct {
+		Members []rawLogEntry `json:"Members"`
+	}
+	if err := getJSON(fmt.Sprintf("%s?$top=%d", uri, top), &collection); err != nil {
+		return nil, err
+	}
+	members := collection.Members
+	if len(members) > top {
+		members = members[:top]
+	}
+
+	entries := make([]BMCLogEntry, len(members))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	for i, m := range members {
+		if m.Message != "" || m.Created != "" || m.ODataID == "" {
+			entries[i] = BMCLogEntry{Created: m.Created, Severity: m.Severity, Message: m.Message}
+			continue
+		}
+		wg.Add(1)
+		go func(i int, link string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			var full rawLogEntry
+			if getJSON(link, &full) == nil {
+				entries[i] = BMCLogEntry{Created: full.Created, Severity: full.Severity, Message: full.Message}
+			}
+		}(i, m.ODataID)
+	}
+	wg.Wait()
+
+	out := entries[:0]
+	for _, e := range entries {
+		if e.Message != "" {
+			out = append(out, e)
+		}
+	}
+	return out, ctx.Err()
+}
+
+// KVM returns a browser URL for the BMC's graphical console. On Dell iDRAC9 it
+// asks for a one-time console credential (GetKVMSession) so the virtual console
+// opens without a login and the real password never reaches the browser.
+// Other BMCs get their web UI, where the user logs in once.
+func (b *redfishBMC) KVM(ctx context.Context) (KVMLaunch, error) {
+	base := b.config.Host
+	if !strings.Contains(base, "://") {
+		base = "https://" + base
+	}
+	base = strings.TrimSuffix(base, "/")
+	launch := KVMLaunch{URL: base + "/", Kind: "login", Note: "Log in to the BMC, then open its remote console."}
+
+	err := b.withSystem(ctx, func(c *gofish.APIClient, system *schemas.ComputerSystem) error {
+		if !strings.Contains(strings.ToLower(system.Manufacturer), "dell") {
+			return nil
+		}
+		resp, err := c.Post("/redfish/v1/Managers/iDRAC.Embedded.1/Oem/Dell/DelliDRACCardService/Actions/DelliDRACCardService.GetKVMSession",
+			map[string]string{"SessionTypeName": "idrac_cert_file.txt"})
+		if err != nil {
+			launch.Note = "This iDRAC couldn't issue a one-time console login (needs iDRAC9 with an Enterprise license); log in to open its virtual console."
+			return nil
+		}
+		defer schemas.DeferredCleanupHTTPResponse(resp)
+		var session struct {
+			TempUsername string
+			TempPassword string
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&session); err != nil || session.TempUsername == "" {
+			return nil
+		}
+		launch = KVMLaunch{URL: idracConsoleURL(base, b.config.Username, session.TempUsername, session.TempPassword), Kind: "direct"}
+		return nil
+	})
+	return launch, err
+}
+
+// idracConsoleURL builds the iDRAC virtual console link the way Dell's own launcher does:
+// parameters in this order, values unencoded. The iDRAC reads the query literally, so
+// percent-encoding the one-time password makes it reject the login. Only characters that
+// would break the URL itself are escaped.
+func idracConsoleURL(base, username, tempUsername, tempPassword string) string {
+	literal := strings.NewReplacer("%", "%25", "&", "%26", "#", "%23", " ", "%20")
+	return fmt.Sprintf("%s/console?username=%s&tempUsername=%s&tempPassword=%s",
+		base, literal.Replace(username), literal.Replace(tempUsername), literal.Replace(tempPassword))
 }
