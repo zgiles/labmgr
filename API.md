@@ -4,6 +4,8 @@ Base URL: `http://<host>:8098/api/v2`. JSON in and out. There's no authenticatio
 
 Errors come back as `{"error": "message"}` with a meaningful status: `400` bad request, `404` unknown server/operation, `409` conflict (the server is busy, or already in the requested state), `502` the BMC didn't answer.
 
+Anywhere a path takes a server (`/servers/:id/...`), the ID, the server's name, or its hostname works, in any case. An unknown server gets `404` with `{"error", "servers": [every ID]}`.
+
 Every request that changes something is recorded in the activity history with who asked. Send `X-Labmgr-User: <name>` to name yourself; otherwise it's recorded as `api@<client-ip>`.
 
 - [Servers](#servers)
@@ -66,6 +68,10 @@ All servers with their live state. Credentials are never included.
 
 `state.bmc` and `state.pdu` are `ok`, `unreachable`, `none` (not configured) or `pending`. `state.power` is what the BMC reports: `on`, `off`, or `unknown`.
 
+Each server also has `state.hardware` (`manufacturer`, `model`, `health`, `bmc_model`, `bmc_firmware`; read from the BMC hourly) and `last_operation` (`id`, `kind`, `label`, `status`, `error`, `note`, `finished_at`) for its most recent finished operation.
+
+`GET /servers?format=text` returns the same overview as an aligned plain-text table (ID, name, state, watts, hardware, network boot, current or last activity), meant to be read directly by people and agents.
+
 ### `GET /servers/:id`
 
 One server, same shape.
@@ -99,6 +105,8 @@ Everything that changes a server is an operation: a list of steps planned from t
 
 Add `"scheduled_for": "2026-10-15T02:00:00Z"` to run it later. A scheduled operation is planned when it starts.
 
+Add `?wait=<seconds>` (up to 600) to get the outcome in one call: the request returns when the operation finishes. Without it, or if it's still running when the wait ends, the response is `202` with the operation as it stands; finished (or scheduled) operations come back `200`.
+
 Returns `202` with the operation. `409` if the server is busy, or there's nothing to do (`"node01 is already on"`).
 
 ```json
@@ -129,6 +137,8 @@ Step `status`: `pending`, `running`, `succeeded`, `failed`, `skipped`. `attempts
 Newest first. Query: `server=<id>`, `active=true` (scheduled, pending, running), `limit` (default 100). `GET /servers/:id/operations` is the same for one server.
 
 ### `GET /operations/:id`
+
+`?wait=<seconds>` waits for it to finish, as above.
 
 ### `POST /operations/:id/cancel`
 

@@ -135,8 +135,12 @@ func (a *App) router() http.Handler {
 	r := gin.New()
 	r.Use(gin.Recovery(), requestLogger())
 
-	a.registerV1(r.Group("/api/v1"))
-	a.registerV2(r.Group("/api/v2"))
+	v1 := r.Group("/api/v1")
+	v1.Use(a.resolveServerParam())
+	a.registerV1(v1)
+	v2 := r.Group("/api/v2")
+	v2.Use(a.resolveServerParam())
+	a.registerV2(v2)
 
 	r.GET("/boot.ipxe", serveBootstrap)
 	r.GET("/static/boot.ipxe", serveBootstrap)

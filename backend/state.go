@@ -64,6 +64,7 @@ type ServerState struct {
 	Outlets   []OutletStatus    `json:"outlets,omitempty"`
 	Operation *OperationSummary `json:"operation,omitempty"`
 	LastBoot  *BootFetch        `json:"last_boot,omitempty"`
+	Hardware  *HardwareSummary  `json:"hardware,omitempty"`
 	Watts     *float64          `json:"watts,omitempty"` // latest power draw reading
 	WattsAt   *time.Time        `json:"watts_at,omitempty"`
 
@@ -227,6 +228,11 @@ func (s *StateStore) update(serverID string, fn func(*ServerState)) {
 func sameVisibleState(a, b ServerState) bool {
 	a.BMCCheckedAt, a.PDUCheckedAt, a.WattsAt = nil, nil, nil
 	b.BMCCheckedAt, b.PDUCheckedAt, b.WattsAt = nil, nil, nil
+	if a.Hardware != nil && b.Hardware != nil {
+		ah, bh := *a.Hardware, *b.Hardware
+		ah.CheckedAt, bh.CheckedAt = time.Time{}, time.Time{}
+		a.Hardware, b.Hardware = &ah, &bh
+	}
 	return reflect.DeepEqual(a, b)
 }
 
@@ -283,6 +289,28 @@ func (s *StateStore) RecordWatts(serverID string, watts float64, err error) {
 	})
 }
 
+// HardwareSummary is what the BMC says the machine is, refreshed hourly
+type HardwareSummary struct {
+	Manufacturer string    `json:"manufacturer,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Health       string    `json:"health,omitempty"`
+	BMCModel     string    `json:"bmc_model,omitempty"`
+	BMCFirmware  string    `json:"bmc_firmware,omitempty"`
+	CheckedAt    time.Time `json:"checked_at"`
+}
+
+func (s *StateStore) RecordHardware(serverID string, info BMCInfo) {
+	hw := &HardwareSummary{
+		Manufacturer: info.Manufacturer,
+		Model:        info.Model,
+		Health:       info.Health,
+		BMCModel:     info.BMCModel,
+		BMCFirmware:  info.BMCFirmware,
+		CheckedAt:    time.Now(),
+	}
+	s.update(serverID, func(st *ServerState) { st.Hardware = hw })
+}
+
 func (s *StateStore) SetOperation(serverID string, op *OperationSummary) {
 	s.update(serverID, func(st *ServerState) { st.Operation = op })
 }
@@ -326,6 +354,10 @@ func (st *ServerState) clone() ServerState {
 	if st.Watts != nil {
 		w := *st.Watts
 		c.Watts = &w
+	}
+	if st.Hardware != nil {
+		h := *st.Hardware
+		c.Hardware = &h
 	}
 	if st.WattsAt != nil {
 		t := *st.WattsAt

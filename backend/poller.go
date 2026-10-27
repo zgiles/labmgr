@@ -9,6 +9,7 @@ import (
 
 const (
 	powerSampleEvery = 10 * time.Second // power draw reading interval
+	hardwareEvery    = time.Hour        // model/health refresh
 	pollReachable    = 30 * time.Second // BMC/PDU answering
 	pollUnreachable  = 90 * time.Second // BMC/PDU not answering
 	pollFast         = 5 * time.Second  // while an operation is running on the server
@@ -29,6 +30,7 @@ type Poller struct {
 	next     map[string]time.Time // "bmc:<server>" / "pdu:<pdu>" -> next poll
 	fast     map[string]time.Time // server -> fast polling until
 	sampled  map[string]time.Time // server -> last power reading
+	hwRead   map[string]time.Time // server -> last hardware read
 }
 
 func NewPoller(config *ConfigStore, hw Hardware, state *StateStore) *Poller {
@@ -40,6 +42,7 @@ func NewPoller(config *ConfigStore, hw Hardware, state *StateStore) *Poller {
 		next:     make(map[string]time.Time),
 		fast:     make(map[string]time.Time),
 		sampled:  make(map[string]time.Time),
+		hwRead:   make(map[string]time.Time),
 	}
 }
 
@@ -73,6 +76,7 @@ func (p *Poller) tick(ctx context.Context) {
 			id := server.ID
 			p.dispatch(ctx, "bmc:"+id, now, func(ctx context.Context) bool { return p.pollBMC(ctx, config, id) })
 			p.samplePowerIfDue(ctx, server)
+			p.readHardwareIfDue(ctx, server)
 		}
 		for _, ref := range server.Outlets() {
 			pdusInUse[ref.PDUID] = true
@@ -306,4 +310,42 @@ func (p *Poller) PollAllNow(ctx context.Context) {
 		}(config.Servers[i].ID)
 	}
 	wg.Wait()
+}
+
+// readHardwareIfDue refreshes a responding BMC's model and health once an hour
+func (p *Poller) readHardwareIfDue(ctx context.Context, server *Server) {
+	if st, ok := p.state.Get(server.ID); !ok || st.BMC != LinkOK {
+		return
+	}
+	key := "hw:" + server.ID
+	p.mu.Lock()
+	if p.inflight[key] || time.Since(p.hwRead[server.ID]) < hardwareEvery {
+		p.mu.Unlock()
+		return
+	}
+	p.inflight[key] = true
+	p.hwRead[server.ID] = time.Now()
+	p.mu.Unlock()
+
+	go func() {
+		defer func() {
+			p.mu.Lock()
+			p.inflight[key] = false
+			p.mu.Unlock()
+		}()
+		bmc := p.hw.BMC(server)
+		if bmc == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		if info, err := bmc.Info(ctx); err == nil {
+			p.state.RecordHardware(server.ID, info)
+		} else {
+			// Try again sooner than an hour if the read failed
+			p.mu.Lock()
+			p.hwRead[server.ID] = time.Now().Add(-hardwareEvery + 5*time.Minute)
+			p.mu.Unlock()
+		}
+	}()
 }

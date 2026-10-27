@@ -13,17 +13,18 @@ import (
 
 // ServerView is a server as clients see it: config without credentials, plus live state
 type ServerView struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Metadata    map[string]string `json:"metadata"`
-	BMCHost     string            `json:"bmc_host,omitempty"`
-	HasBMC      bool              `json:"has_bmc"`
-	Outlets     []string          `json:"outlets"`
-	MAC         string            `json:"mac,omitempty"`
-	State       ServerState       `json:"state"`
-	OS          *OSView           `json:"os,omitempty"`
-	Console     ConsoleView       `json:"console"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Description   string            `json:"description"`
+	Metadata      map[string]string `json:"metadata"`
+	BMCHost       string            `json:"bmc_host,omitempty"`
+	HasBMC        bool              `json:"has_bmc"`
+	Outlets       []string          `json:"outlets"`
+	MAC           string            `json:"mac,omitempty"`
+	State         ServerState       `json:"state"`
+	OS            *OSView           `json:"os,omitempty"`
+	Console       ConsoleView       `json:"console"`
+	LastOperation *OperationBrief   `json:"last_operation,omitempty"`
 }
 
 type OSView struct {
@@ -54,6 +55,9 @@ func (a *App) serverView(server *Server) ServerView {
 		MAC:         server.MAC(),
 		State:       st,
 		Console:     consoleView(server),
+	}
+	if a.engine != nil {
+		view.LastOperation = a.lastOperation(server.ID)
 	}
 	if view.Metadata == nil {
 		view.Metadata = map[string]string{}
@@ -133,7 +137,13 @@ func (a *App) recordEvent(e *Event) {
 func (a *App) registerV2(api *gin.RouterGroup) {
 	api.GET("/info", a.v2Info)
 	api.GET("/stream", a.v2Stream)
-	api.GET("/servers", func(c *gin.Context) { c.JSON(http.StatusOK, a.serverViews()) })
+	api.GET("/servers", func(c *gin.Context) {
+		if c.Query("format") == "text" {
+			c.String(http.StatusOK, a.serversText(a.serverViews()))
+			return
+		}
+		c.JSON(http.StatusOK, a.serverViews())
+	})
 	api.GET("/servers/:id", a.v2Server)
 	api.POST("/servers/:id/operations", a.v2SubmitOperation)
 	api.GET("/servers/:id/operations", func(c *gin.Context) {
@@ -177,7 +187,7 @@ func (a *App) registerV2(api *gin.RouterGroup) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "operation not found"})
 			return
 		}
-		c.JSON(http.StatusOK, op)
+		a.respondOperation(c, op)
 	})
 	api.POST("/operations/:id/cancel", func(c *gin.Context) {
 		if err := a.engine.Cancel(c.Param("id")); err != nil {
@@ -263,7 +273,7 @@ func (a *App) v2SubmitOperation(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusAccepted, op)
+	a.respondOperation(c, op)
 }
 
 func (a *App) v2Refresh(c *gin.Context) {
