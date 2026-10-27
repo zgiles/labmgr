@@ -6,6 +6,7 @@ import type {
   Operation,
   OpRequest,
   OSTemplate,
+  PowerSample,
   Server,
 } from './types'
 
@@ -56,6 +57,9 @@ export const api = {
     ),
 
   bootScript: (serverId: string) => request<BootScript>('GET', v2(`/servers/${id(serverId)}/boot-script`)),
+  power: (serverId: string, hours: number) =>
+    request<{ samples: PowerSample[] }>('GET', v2(`/servers/${id(serverId)}/power?hours=${hours}`)).then((r) => r.samples),
+  powerAll: (hours = 1) => request<Record<string, PowerSample[]>>('GET', v2(`/power?hours=${hours}`)),
   bmc: (serverId: string) => request<BMCDetails>('GET', v2(`/servers/${id(serverId)}/bmc`)),
   kvm: (serverId: string) =>
     request<{ url: string; kind: 'direct' | 'login'; note?: string }>('POST', v2(`/servers/${id(serverId)}/kvm`)),

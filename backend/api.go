@@ -149,6 +149,8 @@ func (a *App) registerV2(api *gin.RouterGroup) {
 		c.JSON(http.StatusOK, events)
 	})
 	api.GET("/servers/:id/boot-script", a.v2BootScript)
+	api.GET("/servers/:id/power", a.v2PowerHistory)
+	api.GET("/power", a.v2PowerAll)
 	api.GET("/servers/:id/bmc", a.v2BMCInfo)
 	api.GET("/servers/:id/bmc/logs", a.v2BMCLogs)
 	api.GET("/servers/:id/console", a.v2Console)
@@ -272,6 +274,46 @@ func (a *App) v2Refresh(c *gin.Context) {
 		return
 	}
 	a.v2Server(c)
+}
+
+// powerRange reads ?hours= (default 1, at most a week)
+func powerRange(c *gin.Context) time.Time {
+	hours := queryInt(c, "hours", 1)
+	if hours > 24*7 {
+		hours = 24 * 7
+	}
+	return time.Now().Add(-time.Duration(hours) * time.Hour)
+}
+
+// v2PowerHistory returns one server's power readings, at most 600 points
+func (a *App) v2PowerHistory(c *gin.Context) {
+	if a.config.Get().Server(c.Param("id")) == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "server not found"})
+		return
+	}
+	samples, err := a.store.PowerHistory(c.Param("id"), powerRange(c), 600)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"samples": samples})
+}
+
+// v2PowerAll returns every server's recent readings, sized for table sparklines
+func (a *App) v2PowerAll(c *gin.Context) {
+	since := powerRange(c)
+	out := make(map[string][]PowerSample)
+	for _, server := range a.config.Get().Servers {
+		samples, err := a.store.PowerHistory(server.ID, since, 60)
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		if len(samples) > 0 {
+			out[server.ID] = samples
+		}
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (a *App) v2BootScript(c *gin.Context) {

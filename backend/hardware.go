@@ -91,6 +91,7 @@ type BMC interface {
 	Info(ctx context.Context) (BMCInfo, error)
 	Logs(ctx context.Context, limit int) ([]BMCLogEntry, error)
 	KVM(ctx context.Context) (KVMLaunch, error)
+	PowerWatts(ctx context.Context) (float64, error)
 }
 
 // PDUDriver controls one PDU's outlets

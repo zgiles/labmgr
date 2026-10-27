@@ -7,6 +7,7 @@ import type { BMCDetails, Operation, Server } from '../types'
 import { openKVM } from '../actions'
 import { setTab } from '../ui'
 import Icon from './Icon.vue'
+import PowerChart from './PowerChart.vue'
 import StepTrack from './StepTrack.vue'
 
 const props = defineProps<{ server: Server }>()
@@ -137,6 +138,8 @@ const metadata = computed(() =>
         </template>
       </dl>
     </section>
+
+    <PowerChart v-if="server.has_bmc" :server="server" />
 
     <section v-if="server.has_bmc">
       <h3 class="section-title">Hardware</h3>

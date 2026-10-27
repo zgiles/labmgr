@@ -435,3 +435,44 @@ func TestIDRACConsoleURLMatchesDellsLauncher(t *testing.T) {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
+
+func TestPowerDrawIsSampledAndStored(t *testing.T) {
+	app, lab := newTestApp(t)
+	lab.set("bmconly", PowerOn, "")
+	app.poller.PollNow(context.Background(), "bmconly") // BMC must be known to answer first
+	server := app.config.Get().Server("bmconly")
+	app.poller.samplePowerIfDue(context.Background(), server)
+	var st ServerState
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if st, _ = app.state.Get("bmconly"); st.Watts != nil {
+			break
+		}
+	}
+	if st.Watts == nil || *st.Watts != 250 {
+		t.Fatalf("watts = %v", st.Watts)
+	}
+	// Not due again inside the sample interval
+	app.poller.samplePowerIfDue(context.Background(), server)
+	time.Sleep(50 * time.Millisecond)
+	samples, err := app.store.PowerHistory("bmconly", time.Now().Add(-time.Hour), 600)
+	if err != nil || len(samples) != 1 || samples[0][1] != 250 {
+		t.Fatalf("history = %v, %v", samples, err)
+	}
+
+	rec := httptest.NewRecorder()
+	app.router().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/power?hours=1", nil))
+	if !strings.Contains(rec.Body.String(), `"bmconly":[[`) {
+		t.Errorf("bulk power: %s", rec.Body)
+	}
+}
+
+func TestDownsampleAverages(t *testing.T) {
+	var samples []PowerSample
+	for i := 0; i < 100; i++ {
+		samples = append(samples, PowerSample{float64(i), float64(i % 2 * 100)})
+	}
+	out := downsample(samples, 10)
+	if len(out) != 10 || out[0][1] != 50 {
+		t.Errorf("downsample = %v", out)
+	}
+}

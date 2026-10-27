@@ -11,6 +11,8 @@ Every request that changes something is recorded in the activity history with wh
 - [Live updates](#live-updates)
 - [Activity](#activity)
 - [BMC details](#bmc-details)
+- [Power draw](#power-draw)
+- [Graphical console](#graphical-console)
 - [Serial console](#serial-console)
 - [Network boot](#network-boot)
 - [Version 1 (compatibility)](#version-1-compatibility)
@@ -186,6 +188,24 @@ Reads the BMC live (a few seconds):
 ### `GET /servers/:id/bmc/logs`
 
 The BMC's event log, newest first, without login/logout noise. `limit` defaults to 50.
+
+## Power draw
+
+Lab Manager reads each responding BMC's power draw once a minute and keeps 7 days of readings. The latest is `state.watts` (and `state.watts_at`) on every server, and updates arrive over `/stream`.
+
+### `GET /servers/:id/power?hours=24`
+
+`{"samples": [[unix_ms, watts], ...]}`, oldest first. `hours` defaults to 1 (max 168); long ranges are averaged down to at most 600 points.
+
+### `GET /power?hours=1`
+
+Every server's recent readings, at most 60 points each, keyed by server ID (servers without readings are omitted). Sized for sparklines.
+
+## Graphical console
+
+### `POST /servers/:id/kvm`
+
+`{"url": "...", "kind": "direct" | "login", "note": "..."}`. On Dell iDRAC9 (Enterprise license) the URL opens the HTML5 virtual console directly with a one-time login from `GetKVMSession`; other BMCs get their web UI. The URL may carry a one-time credential: the response is `no-store` and it is never logged.
 
 ## Serial console
 

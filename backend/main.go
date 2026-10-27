@@ -75,6 +75,7 @@ func main() {
 
 	hw := newRealHardware()
 	poller := NewPoller(config, hw, state)
+	poller.store = store
 	engine := NewEngine(config, hw, state, poller, store, hub, osManager)
 	if err := engine.Load(); err != nil {
 		log.Fatalf("Failed to load operations: %v", err)

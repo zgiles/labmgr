@@ -48,6 +48,8 @@ export interface ServerState {
   outlets?: OutletStatus[]
   operation?: OperationSummary
   last_boot?: BootFetch
+  watts?: number
+  watts_at?: string
   bmc_checked_at?: string
   pdu_checked_at?: string
 }
@@ -159,6 +161,9 @@ export interface BMCLogEntry {
   severity: string
   message: string
 }
+
+/** [unix milliseconds, watts] */
+export type PowerSample = [number, number]
 
 export interface OpRequest {
   kind: string

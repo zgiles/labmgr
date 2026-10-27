@@ -4,7 +4,9 @@ import { powerOff, powerOn, serverActions } from '../actions'
 import ActionMenu from '../components/ActionMenu.vue'
 import Icon from '../components/Icon.vue'
 import StateBadge from '../components/StateBadge.vue'
+import Sparkline from '../components/Sparkline.vue'
 import StepTrack from '../components/StepTrack.vue'
+import Tip from '../components/Tip.vue'
 import { dateTime, isBusy, isOff, relativeTime, stateExplanation } from '../format'
 import { api } from '../api'
 import { errorText, operationsFor, runningOperation, store, toast } from '../store'
@@ -43,6 +45,24 @@ function nextOrLast(server: Server): { scheduled?: Operation; failed?: Operation
   const last = ops.find((op) => op.status !== 'scheduled')
   const failed = last && (last.status === 'failed' || last.status === 'interrupted') ? last : undefined
   return { scheduled, failed }
+}
+
+function failedTip(server: Server) {
+  const op = nextOrLast(server).failed!
+  return `${op.label.replace(` ${server.name}`, '')} failed ${relativeTime(op.finished_at)}\n${op.error ?? ''}`.trim()
+}
+
+function scheduledTip(server: Server) {
+  const op = nextOrLast(server).scheduled!
+  return `${op.label.replace(` ${server.name}`, '')} scheduled for ${dateTime(op.scheduled_for)} (${relativeTime(op.scheduled_for)})`
+}
+
+function powerTip(server: Server) {
+  const samples = store.power[server.id] ?? []
+  const now = `${Math.round(server.state.watts!)} W now`
+  if (samples.length < 2) return now
+  const watts = samples.map(([, w]) => w)
+  return `${now}\n${Math.round(Math.min(...watts))}–${Math.round(Math.max(...watts))} W over the last hour`
 }
 
 function bmcTitle(server: Server) {
@@ -98,9 +118,9 @@ async function cancel(op: Operation) {
           <tr>
             <th>Server</th>
             <th>State</th>
-            <th class="now-col">Now</th>
             <th class="boot-col">Network boot</th>
             <th class="control-col">Control</th>
+            <th class="power-col">Power</th>
             <th><span class="visually-hidden">Actions</span></th>
           </tr>
         </thead>
@@ -116,29 +136,22 @@ async function cancel(op: Operation) {
               <div class="sub">{{ server.description || server.metadata.role || server.id }}</div>
             </td>
             <td class="state-cell">
-              <StateBadge :state="server.state.state" />
-              <div class="sub">{{ stateExplanation(server, true) }}</div>
-            </td>
-            <td class="now-cell">
-              <template v-if="runningOperation(server.id)">
-                <div class="op-name">{{ runningOperation(server.id)!.label.replace(` ${server.name}`, '') }}</div>
-                <StepTrack :op="runningOperation(server.id)!" />
-              </template>
-              <template v-else-if="nextOrLast(server).failed">
-                <button class="failed" @click.stop="openServer(server.id, 'activity')" :title="nextOrLast(server).failed!.error">
-                  <Icon name="alert" :size="14" />
-                  {{ nextOrLast(server).failed!.label.replace(` ${server.name}`, '') }} failed
-                </button>
-                <div class="sub">{{ relativeTime(nextOrLast(server).failed!.finished_at) }}</div>
-              </template>
-              <template v-else-if="nextOrLast(server).scheduled">
-                <div class="scheduled">
-                  <Icon name="clock" :size="14" />
-                  {{ nextOrLast(server).scheduled!.label.replace(` ${server.name}`, '') }}
-                </div>
-                <div class="sub num">{{ dateTime(nextOrLast(server).scheduled!.scheduled_for) }}</div>
-              </template>
-              <span v-else class="faint">—</span>
+              <div class="state-line">
+                <Tip :text="stateExplanation(server)">
+                  <StateBadge :state="server.state.state" />
+                </Tip>
+                <Tip v-if="!runningOperation(server.id) && nextOrLast(server).failed" :text="failedTip(server)">
+                  <button class="flag flag-failed" :aria-label="failedTip(server)" @click.stop="openServer(server.id, 'activity')">
+                    <Icon name="alert" :size="14" />
+                  </button>
+                </Tip>
+                <Tip v-if="nextOrLast(server).scheduled" :text="scheduledTip(server)">
+                  <button class="flag" :aria-label="scheduledTip(server)" @click.stop="openServer(server.id)">
+                    <Icon name="clock" :size="14" />
+                  </button>
+                </Tip>
+              </div>
+              <StepTrack v-if="runningOperation(server.id)" class="inline-track" :op="runningOperation(server.id)!" />
             </td>
             <td class="boot-cell">
               <template v-if="server.os">
@@ -160,6 +173,12 @@ async function cancel(op: Operation) {
               >
                 <span class="pip" />{{ o.ref.split(':')[1] }}
               </span>
+            </td>
+            <td class="power-cell">
+              <Tip v-if="server.state.watts != null" :text="powerTip(server)">
+                <span class="watts num">{{ Math.round(server.state.watts) }} W</span>
+                <Sparkline :samples="store.power[server.id] ?? []" />
+              </Tip>
             </td>
             <td class="actions-cell" @click.stop>
               <button
@@ -194,9 +213,9 @@ async function cancel(op: Operation) {
           <tr v-for="i in 5" :key="i" class="skeleton-row">
             <td><div class="skeleton" style="width: 110px; height: 14px" /></td>
             <td><div class="skeleton" style="width: 80px; height: 14px" /></td>
-            <td class="now-col"><div class="skeleton" style="width: 140px; height: 14px" /></td>
             <td><div class="skeleton" style="width: 90px; height: 14px" /></td>
             <td><div class="skeleton" style="width: 60px; height: 14px" /></td>
+            <td><div class="skeleton" style="width: 90px; height: 14px" /></td>
             <td />
           </tr>
         </tbody>
@@ -314,35 +333,39 @@ tbody tr.selected {
 .state-cell {
   min-width: 170px;
 }
-.state-cell .sub {
-  max-width: 240px;
-}
-.now-cell {
-  width: 26%;
-  min-width: 200px;
-}
-.op-name {
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 6px;
-}
-.failed {
-  display: inline-flex;
+.state-line {
+  display: flex;
   align-items: center;
   gap: 6px;
+}
+.flag {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 0;
+  border-radius: 6px;
   background: none;
-  font: inherit;
-  font-size: 13px;
-  color: var(--danger-text);
+  color: var(--text-2);
   cursor: pointer;
-  text-align: left;
 }
-.scheduled {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.flag:hover {
+  background: var(--surface-2);
+}
+.flag-failed {
+  color: var(--danger);
+}
+.inline-track {
+  margin-top: 8px;
+  max-width: 280px;
+}
+.power-cell {
+  white-space: nowrap;
+}
+.watts {
+  display: inline-block;
+  min-width: 46px;
   font-size: 13px;
 }
 .boot-cell {
@@ -393,22 +416,17 @@ tbody tr.selected {
   margin-right: 4px;
 }
 
-/* Beside the open panel: keep name, state, progress and actions */
+/* Beside the open panel: keep name, state, power and actions */
 .compact .boot-col,
 .compact .boot-cell,
 .compact .control-col,
-.compact .control-cell,
-.compact .state-cell .sub {
+.compact .control-cell {
   display: none;
-}
-.compact .now-cell {
-  width: auto;
-  min-width: 160px;
 }
 
 @media (max-width: 860px) {
-  .now-col,
-  .now-cell:empty {
+  .boot-col,
+  .boot-cell {
     display: none;
   }
 }
@@ -459,17 +477,16 @@ tbody tr.selected {
     text-align: right;
     min-width: 0;
   }
-  .state-cell .sub {
-    display: none;
+  .state-line {
+    justify-content: flex-end;
   }
-  .now-cell,
-  .now-cell:empty {
-    display: block;
-    grid-column: 1 / -1;
-    min-width: 0;
-    width: auto;
+  .inline-track {
+    margin-left: auto;
   }
-  .now-cell > .faint {
+  .power-cell {
+    grid-column: 1;
+  }
+  .power-cell:empty {
     display: none;
   }
   .boot-cell {

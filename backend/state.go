@@ -64,6 +64,8 @@ type ServerState struct {
 	Outlets   []OutletStatus    `json:"outlets,omitempty"`
 	Operation *OperationSummary `json:"operation,omitempty"`
 	LastBoot  *BootFetch        `json:"last_boot,omitempty"`
+	Watts     *float64          `json:"watts,omitempty"` // latest power draw reading
+	WattsAt   *time.Time        `json:"watts_at,omitempty"`
 
 	BMCCheckedAt *time.Time `json:"bmc_checked_at,omitempty"`
 	PDUCheckedAt *time.Time `json:"pdu_checked_at,omitempty"`
@@ -223,8 +225,8 @@ func (s *StateStore) update(serverID string, fn func(*ServerState)) {
 
 // sameVisibleState compares states ignoring check timestamps, so routine polls don't spam clients
 func sameVisibleState(a, b ServerState) bool {
-	a.BMCCheckedAt, a.PDUCheckedAt = nil, nil
-	b.BMCCheckedAt, b.PDUCheckedAt = nil, nil
+	a.BMCCheckedAt, a.PDUCheckedAt, a.WattsAt = nil, nil, nil
+	b.BMCCheckedAt, b.PDUCheckedAt, b.WattsAt = nil, nil, nil
 	return reflect.DeepEqual(a, b)
 }
 
@@ -237,6 +239,7 @@ func (s *StateStore) RecordBMC(serverID string, power PowerState, err error) {
 		st.BMCCheckedAt = &now
 		if err != nil {
 			st.BMC, st.BMCError, st.Power = LinkUnreachable, err.Error(), PowerUnknown
+			st.Watts, st.WattsAt = nil, nil
 			return
 		}
 		st.BMC, st.BMCError, st.Power = LinkOK, "", power
@@ -264,6 +267,19 @@ func (s *StateStore) RecordOutlets(serverID string, states map[string]PowerState
 				st.Outlets[i].State = state
 			}
 		}
+	})
+}
+
+// RecordWatts records a power draw reading; a failed read clears it so stale numbers don't linger
+func (s *StateStore) RecordWatts(serverID string, watts float64, err error) {
+	now := time.Now()
+	s.update(serverID, func(st *ServerState) {
+		if err != nil {
+			st.Watts, st.WattsAt = nil, nil
+			return
+		}
+		w := watts
+		st.Watts, st.WattsAt = &w, &now
 	})
 }
 
@@ -306,6 +322,14 @@ func (st *ServerState) clone() ServerState {
 	if st.LastBoot != nil {
 		b := *st.LastBoot
 		c.LastBoot = &b
+	}
+	if st.Watts != nil {
+		w := *st.Watts
+		c.Watts = &w
+	}
+	if st.WattsAt != nil {
+		t := *st.WattsAt
+		c.WattsAt = &t
 	}
 	if st.BMCCheckedAt != nil {
 		t := *st.BMCCheckedAt

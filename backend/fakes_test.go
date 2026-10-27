@@ -156,6 +156,18 @@ func (b *fakeBMC) Info(ctx context.Context) (BMCInfo, error) {
 	return BMCInfo{Manufacturer: "Dell Inc.", Model: "Fake"}, nil
 }
 
+func (b *fakeBMC) PowerWatts(ctx context.Context) (float64, error) {
+	b.lab.mu.Lock()
+	defer b.lab.mu.Unlock()
+	if !b.lab.bmcPowered(b.id) {
+		return 0, errDark
+	}
+	if b.lab.power[b.id] == PowerOn {
+		return 250, nil
+	}
+	return 12, nil
+}
+
 func (b *fakeBMC) KVM(ctx context.Context) (KVMLaunch, error) {
 	return KVMLaunch{URL: "https://bmc.example/console?tempPassword=one-time", Kind: "direct"}, nil
 }
@@ -239,6 +251,7 @@ func newTestApp(t *testing.T) (*App, *fakeLab) {
 	state.Sync(config.Get())
 	lab := newFakeLab(config.Get())
 	poller := NewPoller(config, lab, state)
+	poller.store = store
 	engine := NewEngine(config, lab, state, poller, store, hub, osManager)
 	engine.timing = Timing{PollInterval: time.Millisecond, RetryBase: time.Millisecond, ActionTime: 5 * time.Second, Unit: time.Millisecond}
 

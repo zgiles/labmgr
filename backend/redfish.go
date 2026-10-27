@@ -348,3 +348,35 @@ func idracConsoleURL(base, username, tempUsername, tempPassword string) string {
 	return fmt.Sprintf("%s/console?username=%s&tempUsername=%s&tempPassword=%s",
 		base, literal.Replace(username), literal.Replace(tempUsername), literal.Replace(tempPassword))
 }
+
+// PowerWatts reads the system's current power draw. Chassis Power (PowerControl) is
+// what iDRAC and XCC report; newer firmware may only offer EnvironmentMetrics.
+func (b *redfishBMC) PowerWatts(ctx context.Context) (float64, error) {
+	var watts float64
+	found := false
+	err := b.withSystem(ctx, func(_ *gofish.APIClient, system *schemas.ComputerSystem) error {
+		chassis, err := system.Chassis()
+		if err != nil {
+			return err
+		}
+		for _, ch := range chassis {
+			if power, err := ch.Power(); err == nil && power != nil {
+				for _, pc := range power.PowerControl {
+					if pc.PowerConsumedWatts != nil {
+						watts, found = float64(*pc.PowerConsumedWatts), true
+						return nil
+					}
+				}
+			}
+			if metrics, err := ch.EnvironmentMetrics(); err == nil && metrics != nil && metrics.PowerWatts.Reading != nil {
+				watts, found = *metrics.PowerWatts.Reading, true
+				return nil
+			}
+		}
+		return nil
+	})
+	if err == nil && !found {
+		err = fmt.Errorf("BMC doesn't report power draw")
+	}
+	return watts, err
+}

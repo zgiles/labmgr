@@ -8,11 +8,12 @@ import (
 )
 
 const (
-	pollReachable   = 30 * time.Second // BMC/PDU answering
-	pollUnreachable = 90 * time.Second // BMC/PDU not answering
-	pollFast        = 5 * time.Second  // while an operation is running on the server
-	bmcPollTimeout  = 10 * time.Second
-	pduPollTimeout  = 10 * time.Second
+	powerSampleEvery = 10 * time.Second // power draw reading interval
+	pollReachable    = 30 * time.Second // BMC/PDU answering
+	pollUnreachable  = 90 * time.Second // BMC/PDU not answering
+	pollFast         = 5 * time.Second  // while an operation is running on the server
+	bmcPollTimeout   = 10 * time.Second
+	pduPollTimeout   = 10 * time.Second
 )
 
 // Poller keeps the state store fresh. Each BMC and each PDU is polled on its own
@@ -21,11 +22,13 @@ type Poller struct {
 	config *ConfigStore
 	hw     Hardware
 	state  *StateStore
+	store  *Store // power history; may be nil
 
 	mu       sync.Mutex
 	inflight map[string]bool
 	next     map[string]time.Time // "bmc:<server>" / "pdu:<pdu>" -> next poll
 	fast     map[string]time.Time // server -> fast polling until
+	sampled  map[string]time.Time // server -> last power reading
 }
 
 func NewPoller(config *ConfigStore, hw Hardware, state *StateStore) *Poller {
@@ -36,6 +39,7 @@ func NewPoller(config *ConfigStore, hw Hardware, state *StateStore) *Poller {
 		inflight: make(map[string]bool),
 		next:     make(map[string]time.Time),
 		fast:     make(map[string]time.Time),
+		sampled:  make(map[string]time.Time),
 	}
 }
 
@@ -43,8 +47,13 @@ func (p *Poller) Run(ctx context.Context) {
 	log.Println("Starting status poller")
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	lastPrune := time.Now()
 	for {
 		p.tick(ctx)
+		if p.store != nil && time.Since(lastPrune) > time.Hour {
+			p.store.PrunePower()
+			lastPrune = time.Now()
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -63,6 +72,7 @@ func (p *Poller) tick(ctx context.Context) {
 		if server.HasBMC() {
 			id := server.ID
 			p.dispatch(ctx, "bmc:"+id, now, func(ctx context.Context) bool { return p.pollBMC(ctx, config, id) })
+			p.samplePowerIfDue(ctx, server)
 		}
 		for _, ref := range server.Outlets() {
 			pdusInUse[ref.PDUID] = true
@@ -164,6 +174,47 @@ func (p *Poller) pollBMC(ctx context.Context, config *Config, serverID string) b
 	}
 	p.state.RecordBMC(serverID, power, err)
 	return err == nil
+}
+
+// samplePowerIfDue starts a power reading for a server whose BMC is responding,
+// on its own schedule (independent of status polls), never two at once per server
+func (p *Poller) samplePowerIfDue(ctx context.Context, server *Server) {
+	if st, ok := p.state.Get(server.ID); !ok || st.BMC != LinkOK {
+		return
+	}
+	key := "watts:" + server.ID
+	p.mu.Lock()
+	if p.inflight[key] || time.Since(p.sampled[server.ID]) < powerSampleEvery {
+		p.mu.Unlock()
+		return
+	}
+	p.inflight[key] = true
+	p.sampled[server.ID] = time.Now()
+	p.mu.Unlock()
+
+	go func() {
+		defer func() {
+			p.mu.Lock()
+			p.inflight[key] = false
+			p.mu.Unlock()
+		}()
+		if bmc := p.hw.BMC(server); bmc != nil {
+			p.samplePower(ctx, server.ID, bmc)
+		}
+	}()
+}
+
+// samplePower reads power draw once and records it
+func (p *Poller) samplePower(ctx context.Context, serverID string, bmc BMC) {
+	ctx, cancel := context.WithTimeout(ctx, bmcPollTimeout)
+	defer cancel()
+	watts, err := bmc.PowerWatts(ctx)
+	p.state.RecordWatts(serverID, watts, err)
+	if err == nil && p.store != nil {
+		if err := p.store.AppendPower(serverID, time.Now(), watts); err != nil {
+			log.Printf("Warning: failed to record power for %s: %v", serverID, err)
+		}
+	}
 }
 
 func (p *Poller) pollPDU(ctx context.Context, config *Config, pduID string) bool {

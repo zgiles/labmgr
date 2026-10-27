@@ -1,6 +1,6 @@
 import { computed, reactive } from 'vue'
 import { api, ApiError } from './api'
-import type { ActivityEvent, Operation, OpRequest, OSTemplate, Server, ServerState } from './types'
+import type { ActivityEvent, Operation, OpRequest, OSTemplate, PowerSample, Server, ServerState } from './types'
 
 export type Connection = 'connecting' | 'live' | 'reconnecting'
 
@@ -18,6 +18,8 @@ export const store = reactive({
   connection: 'connecting' as Connection,
   loaded: false,
   toasts: [] as Toast[],
+  /** last hour of power readings per server, for table sparklines */
+  power: {} as Record<string, PowerSample[]>,
 })
 
 const finished = new Set(['succeeded', 'failed', 'cancelled', 'interrupted'])
@@ -91,6 +93,24 @@ export async function reloadTemplates() {
 function applyState(state: ServerState) {
   const server = serverById(state.server_id)
   if (server) server.state = state
+  // Extend the sparkline with each new reading, keeping an hour
+  if (state.watts != null && state.watts_at) {
+    const t = new Date(state.watts_at).getTime()
+    const series = store.power[state.server_id] ?? (store.power[state.server_id] = [])
+    if (!series.length || series[series.length - 1][0] < t) {
+      series.push([t, state.watts])
+      const cutoff = Date.now() - 3600_000
+      while (series.length && series[0][0] < cutoff) series.shift()
+    }
+  }
+}
+
+async function loadPower() {
+  try {
+    store.power = await api.powerAll(1)
+  } catch {
+    // sparklines are a nicety; the table still works without them
+  }
 }
 
 let reloadTimer: ReturnType<typeof setTimeout> | undefined
@@ -129,5 +149,7 @@ export function connect() {
   }
 
   reloadTemplates()
+  loadPower()
+  setInterval(loadPower, 5 * 60_000)
   api.events(undefined, 100).then((events) => (store.events = events)).catch(() => {})
 }
