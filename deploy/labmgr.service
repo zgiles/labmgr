@@ -1,0 +1,61 @@
+# Lab Manager systemd unit.
+#
+# Expects the layout from DEPLOYMENT.md:
+#   /opt/labmgr/labmgr                   the binary (a copy on local disk, not a build output
+#                                        on a shared filesystem; rebuilding that file under a
+#                                        running process kills it)
+#   /opt/labmgr/config/servers.yaml      config with BMC/PDU credentials (mode 0600)
+#   /opt/labmgr/config/                  also holds servers.db and servers.os.json, so it must
+#                                        be writable by the labmgr user
+#
+# Install:
+#   sudo useradd --system --home /opt/labmgr --shell /usr/sbin/nologin labmgr
+#   sudo cp deploy/labmgr.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now labmgr
+#
+# Edit the config and it reloads on its own (or: sudo systemctl reload labmgr).
+
+[Unit]
+Description=Lab Manager (BMC/PDU power, network boot, consoles)
+Documentation=file:///opt/labmgr/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=labmgr
+Group=labmgr
+WorkingDirectory=/opt/labmgr
+ExecStart=/opt/labmgr/labmgr -config /opt/labmgr/config/servers.yaml -listen 0.0.0.0:8098
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+# Let running operations record their outcome before stopping
+TimeoutStopSec=15s
+
+# Sandboxing: it needs the network (BMCs, PDUs, browsers) and its config directory, nothing else
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/labmgr/config
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

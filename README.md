@@ -30,7 +30,7 @@ Lab Manager controls and watches the physical servers in a lab: power through ea
 
 ## Quick start
 
-Prerequisites: Go 1.25+, Node.js 20.19+ or 22.12+, network access to your BMCs (HTTPS 443, SSH 22) and PDUs (SNMP 161).
+Prerequisites: Go 1.26+, Node.js 20.19+ or 22.12+, network access to your BMCs (HTTPS 443, SSH 22) and PDUs (SNMP 161).
 
 ```bash
 make build                                  # frontend (typecheck + bundle) and backend, embedded
@@ -49,8 +49,9 @@ Flags:
 | `-listen` | `0.0.0.0:8098` | Address to serve on. |
 | `-data` | next to the config, e.g. `config/servers.db` | Operations and activity history. |
 | `-debug` | off | Log every request and driver detail. |
+| `-os-data` | next to the config, e.g. `config/servers.os.json` | Boot images and assignments. |
 
-OS boot images and assignments are stored next to the config as `servers.os.json`.
+To run it as a service, see [DEPLOYMENT.md](DEPLOYMENT.md): a systemd unit is in `deploy/labmgr.service`, and the repository is a Nix flake with a NixOS module (`services.labmgr`).
 
 ## Development
 

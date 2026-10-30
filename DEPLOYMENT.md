@@ -105,43 +105,61 @@ open http://localhost:8098
 
 ## Systemd Service (Linux)
 
-Create `/etc/systemd/system/labmgr.service`:
-
-```ini
-[Unit]
-Description=Lab Manager
-After=network.target
-
-[Service]
-Type=simple
-User=labmgr
-WorkingDirectory=/opt/labmgr
-ExecStart=/opt/labmgr/labmgr --config=/opt/labmgr/config/servers.yaml
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Setup and start:
+A hardened unit is in [`deploy/labmgr.service`](deploy/labmgr.service): it runs as a
+dedicated `labmgr` user, restarts on failure, and can only write its config directory.
 
 ```bash
-# Create user and directories
-sudo useradd -r -s /bin/false labmgr
+make release                                   # builds releases/labmgr-<commit>-linux-amd64
+sudo useradd --system --home /opt/labmgr --shell /usr/sbin/nologin labmgr
 sudo mkdir -p /opt/labmgr/config
-sudo cp labmgr /opt/labmgr/
-sudo cp config/servers.yaml /opt/labmgr/config/
+sudo install -m 0755 releases/labmgr-<commit>-linux-amd64 /opt/labmgr/labmgr
+sudo install -m 0600 config/servers.yaml /opt/labmgr/config/
 sudo chown -R labmgr:labmgr /opt/labmgr
-
-# Start service
+sudo cp deploy/labmgr.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable labmgr
-sudo systemctl start labmgr
-sudo systemctl status labmgr
+sudo systemctl enable --now labmgr
+journalctl -u labmgr -f
 ```
+
+To upgrade, `install` the new binary over the old one (it replaces the file rather
+than rewriting it, so the running copy is unaffected) and `systemctl restart labmgr`.
+Don't run the service straight out of a build directory on a shared (NFS) filesystem:
+rebuilding that file from another host kills the running process with SIGBUS.
+
+## NixOS
+
+The repository is a flake. It provides `packages.<system>.default` (the binary with
+the web UI embedded; the build runs the test suite) and a NixOS module:
+
+```nix
+{
+  inputs.labmgr.url = "path:/opt/labmgr";   # or a git URL
+
+  outputs = { nixpkgs, labmgr, ... }: {
+    nixosConfigurations.labhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        labmgr.nixosModules.default
+        {
+          services.labmgr = {
+            enable = true;
+            # A string path, so the credentials never enter the Nix store.
+            # Root-only permissions are fine; systemd hands it to the service.
+            configFile = "/etc/labmgr/servers.yaml";
+            # listen = "0.0.0.0:8098";
+            # openFirewall = true;   # the API has no login: trusted networks only
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+The service runs as a dynamic user with its database and boot assignments in
+`/var/lib/labmgr`. It reads the config at start, so restart it after editing.
+`nix build` builds the binary; `nix flake check` also renders the module's unit;
+`nix develop` gives a shell with Go and Node.
 
 ## Docker Deployment
 

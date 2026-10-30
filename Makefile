@@ -1,4 +1,4 @@
-.PHONY: build run dev clean install build-static test
+.PHONY: build run dev clean install build-static release test
 
 # Build everything with embedded assets
 build: build-frontend build-backend
@@ -13,11 +13,21 @@ build-backend: build-frontend
 	cp -r frontend/dist backend/static
 	cd backend && CGO_ENABLED=0 go build -ldflags="-w -s" -o ../labmgr .
 
-# Build static binary (same as build, but explicit)
-build-static: build-frontend
+# Release binary: a new, versioned file every time, never overwriting one that may be
+# running. /srv is shared over NFS, so a host running a binary from this tree would
+# crash (SIGBUS) if the file were rewritten under it.
+RELEASE := releases/labmgr-$(shell git describe --always --dirty)-linux-amd64
+
+release: build-frontend
 	rm -rf backend/static
 	cp -r frontend/dist backend/static
-	cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o ../labmgr-linux-amd64 .
+	@mkdir -p releases
+	@if [ -e $(RELEASE) ]; then echo "$(RELEASE) already exists; not overwriting"; exit 1; fi
+	cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o ../$(RELEASE).tmp .
+	mv $(RELEASE).tmp $(RELEASE)
+	@echo "Built $(RELEASE)"
+
+build-static: release
 
 # Backend tests (fake hardware; nothing touches real machines) and frontend typecheck
 test:
@@ -47,6 +57,7 @@ install:
 # Clean build artifacts
 clean:
 	rm -f labmgr labmgr-*
+	@echo "(releases/ is kept: a host may be running one of those binaries)"
 	rm -rf frontend/dist
 	rm -rf frontend/node_modules
 	rm -rf backend/static

@@ -215,8 +215,11 @@ func getAllOSAssignments(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"assignments": enriched})
 }
 
-// osDataPath returns where OS templates/assignments persist: next to the config, e.g. servers.os.json
+// osDataPath returns where OS templates/assignments persist: -os-data, or next to the config (servers.os.json)
 func osDataPath() string {
+	if osDataFile != "" {
+		return osDataFile
+	}
 	return strings.TrimSuffix(configPath, filepath.Ext(configPath)) + ".os.json"
 }
 

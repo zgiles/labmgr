@@ -19,6 +19,7 @@ import (
 const version = "2.0.0"
 
 var configPath string
+var osDataFile string // OS templates and assignments; default next to the config
 var debugMode bool
 var osManager *OSManager
 
@@ -39,6 +40,7 @@ func main() {
 	flag.StringVar(&configPath, "config", "config/servers.yaml", "Path to configuration file")
 	flag.StringVar(&listenAddr, "listen", "0.0.0.0:8098", "Address to listen on")
 	flag.StringVar(&dataPath, "data", "", "Operations/activity database (default: next to the config, e.g. config/servers.db)")
+	flag.StringVar(&osDataFile, "os-data", "", "Boot images and assignments file (default: next to the config, e.g. config/servers.os.json)")
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug logging")
 	flag.Parse()
 
