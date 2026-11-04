@@ -3,6 +3,7 @@ import type {
   BMCDetails,
   BMCLogEntry,
   BootScript,
+  CaptureInfo,
   Operation,
   OpRequest,
   OSTemplate,
@@ -61,6 +62,8 @@ export const api = {
     request<{ samples: PowerSample[] }>('GET', v2(`/servers/${id(serverId)}/power?hours=${hours}`)).then((r) => r.samples),
   powerAll: (hours = 1) => request<Record<string, PowerSample[]>>('GET', v2(`/power?hours=${hours}`)),
   bmc: (serverId: string) => request<BMCDetails>('GET', v2(`/servers/${id(serverId)}/bmc`)),
+  captures: (serverId: string) => request<CaptureInfo[]>('GET', v2(`/servers/${id(serverId)}/console/captures`)),
+  captureUrl: (serverId: string, name: string) => `/api/v2/servers/${id(serverId)}/console/captures/${id(name)}`,
   kvm: (serverId: string) =>
     request<{ url: string; kind: 'direct' | 'login'; note?: string }>('POST', v2(`/servers/${id(serverId)}/kvm`)),
   bmcLogs: (serverId: string, limit = 50) =>

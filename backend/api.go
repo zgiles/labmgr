@@ -165,6 +165,8 @@ func (a *App) registerV2(api *gin.RouterGroup) {
 	api.GET("/servers/:id/bmc/logs", a.v2BMCLogs)
 	api.GET("/servers/:id/console", a.v2Console)
 	api.GET("/servers/:id/console/log", a.v2ConsoleLog)
+	api.GET("/servers/:id/console/captures", a.v2ConsoleCaptures)
+	api.GET("/servers/:id/console/captures/:name", a.v2ConsoleCapture)
 	api.POST("/servers/:id/kvm", a.v2KVM)
 
 	api.POST("/refresh", func(c *gin.Context) {

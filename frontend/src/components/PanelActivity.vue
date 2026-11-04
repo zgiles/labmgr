@@ -85,6 +85,9 @@ const severityTone = (s: string) => (s === 'OK' ? '' : s === 'Warning' ? 'tone-w
             <p v-if="op.error && !op.steps.some((st) => st.error === op.error)" class="err">{{ op.error }}</p>
             <p v-if="op.note" class="muted">{{ op.note }}</p>
             <StepTrack v-if="op.steps.length" :op="op" detailed />
+            <a v-if="op.console_capture" class="capture-link" :href="api.captureUrl(server.id, op.console_capture)" target="_blank" rel="noopener">
+              Console output from this {{ op.kind === 'reinstall' ? 'install' : 'boot' }}
+            </a>
             <button v-if="['failed', 'cancelled', 'interrupted'].includes(op.status)" class="btn btn-sm" @click="retry(op)">
               Try again
             </button>
@@ -199,6 +202,9 @@ const severityTone = (s: string) => (s === 'OK' ? '' : s === 'Warning' ? 'tone-w
 }
 .msg .badge {
   margin-right: 6px;
+}
+.capture-link {
+  font-size: 13px;
 }
 .lede {
   color: var(--text-2);

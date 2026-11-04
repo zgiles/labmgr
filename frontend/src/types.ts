@@ -106,6 +106,7 @@ export interface Operation {
   current: number
   error?: string
   note?: string
+  console_capture?: string
   requested_by?: string
   created_at: string
   scheduled_for?: string
@@ -160,6 +161,16 @@ export interface BMCLogEntry {
   created: string
   severity: string
   message: string
+}
+
+export interface CaptureInfo {
+  name: string
+  op_id?: string
+  started_at: string
+  updated_at: string
+  bytes: number
+  active: boolean
+  until?: string
 }
 
 /** [unix milliseconds, watts] */

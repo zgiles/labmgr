@@ -83,13 +83,19 @@ func main() {
 		log.Fatalf("Failed to load operations: %v", err)
 	}
 
-	app := &App{config: config, state: state, poller: poller, engine: engine, store: store, hub: hub, hw: hw, consoles: NewConsoleHub(config, hw)}
+	consoles := NewConsoleHub(config, hw)
+	consoles.dir = filepath.Join(filepath.Dir(dataPath), "console")
+	consoles.state = state
+	engine.onStart = consoles.captureForOperation
+
+	app := &App{config: config, state: state, poller: poller, engine: engine, store: store, hub: hub, hw: hw, consoles: consoles}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go poller.Run(ctx)
 	go engine.Run(ctx)
 	go watchConfig(ctx, config)
+	go consoles.Run(ctx)
 
 	server := &http.Server{
 		Addr:        listenAddr,

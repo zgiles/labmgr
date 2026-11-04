@@ -109,6 +109,8 @@ type Operation struct {
 	Error   string   `json:"error,omitempty"`
 	Note    string   `json:"note,omitempty"`
 
+	ConsoleCapture string `json:"console_capture,omitempty"` // recording started with this operation
+
 	RequestedBy  string     `json:"requested_by,omitempty"`
 	Source       string     `json:"source,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
@@ -209,6 +211,10 @@ type Engine struct {
 	cancels map[string]context.CancelFunc
 	seq     atomic.Uint64
 	wg      sync.WaitGroup
+
+	// onStart runs as an operation begins (before its first step); it may start a
+	// console recording and return its name
+	onStart func(op Operation) string
 }
 
 func NewEngine(config *ConfigStore, hw Hardware, state *StateStore, poller *Poller, store *Store, hub *Hub, osm *OSManager) *Engine {
@@ -426,10 +432,17 @@ func (e *Engine) start(op *Operation, steps []*Step) Operation {
 	ctx, cancel := context.WithCancel(context.Background())
 	now := time.Now()
 
+	// Start recording before the first step, so the reboot itself is captured
+	capture := ""
+	if e.onStart != nil && op.ServerID != "" {
+		capture = e.onStart(Operation{ID: op.ID, ServerID: op.ServerID, Kind: op.Kind})
+	}
+
 	e.mu.Lock()
 	op.Steps = steps
 	op.Status = OpRunning
 	op.StartedAt = &now
+	op.ConsoleCapture = capture
 	op.Current = 0
 	e.cancels[op.ID] = cancel
 	snap := op.clone()

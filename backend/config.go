@@ -13,9 +13,39 @@ import (
 )
 
 type Config struct {
-	Servers []Server    `yaml:"servers"`
-	PDUs    []PDU       `yaml:"pdus"`
-	Delays  DelayConfig `yaml:"delays"`
+	Servers        []Server             `yaml:"servers"`
+	PDUs           []PDU                `yaml:"pdus"`
+	Delays         DelayConfig          `yaml:"delays"`
+	ConsoleCapture ConsoleCaptureConfig `yaml:"console_capture"`
+}
+
+// ConsoleCaptureConfig controls recording serial console output to disk
+type ConsoleCaptureConfig struct {
+	// Operations that start a recording (default: power_on, restart, graceful_restart, power_cycle, reinstall)
+	After []string `yaml:"after,omitempty" json:"after"`
+	// How long a recording runs after the operation starts (default 15)
+	Minutes int `yaml:"minutes,omitempty" json:"minutes"`
+	// Record every server continuously, one log per server per day (default off).
+	// Holds the BMC's serial session open all the time, so nothing else can use it.
+	Always bool `yaml:"always,omitempty" json:"always"`
+	// Delete recordings older than this many days (default 30)
+	RetainDays int `yaml:"retain_days,omitempty" json:"retain_days"`
+}
+
+var defaultCaptureAfter = []string{OpPowerOn, OpRestart, OpGracefulRestart, OpPowerCycle, OpReinstall}
+
+// WithDefaults fills unset fields
+func (c ConsoleCaptureConfig) WithDefaults() ConsoleCaptureConfig {
+	if c.After == nil {
+		c.After = defaultCaptureAfter
+	}
+	if c.Minutes <= 0 {
+		c.Minutes = 15
+	}
+	if c.RetainDays <= 0 {
+		c.RetainDays = 30
+	}
+	return c
 }
 
 type DelayConfig struct {
@@ -52,6 +82,8 @@ type ConsoleConfig struct {
 	SSHPort int `yaml:"ssh_port,omitempty" json:"ssh_port,omitempty"`
 	// WebURL overrides the link used for the BMC's own web console
 	WebURL string `yaml:"web_url,omitempty" json:"web_url,omitempty"`
+	// Capture overrides console_capture for this server: "off" or "always"
+	Capture string `yaml:"capture,omitempty" json:"capture,omitempty"`
 }
 
 type PDU struct {
@@ -191,6 +223,12 @@ func validateConfig(config *Config) error {
 		}
 	}
 
+	for _, kind := range config.ConsoleCapture.After {
+		if _, ok := opLabels[kind]; !ok {
+			return fmt.Errorf("console_capture.after: unknown operation %q", kind)
+		}
+	}
+
 	serverIDs := make(map[string]bool)
 	macs := make(map[string]string)
 	for i := range config.Servers {
@@ -204,6 +242,12 @@ func validateConfig(config *Config) error {
 		serverIDs[server.ID] = true
 		if server.Name == "" {
 			server.Name = server.ID
+		}
+
+		switch server.Console.Capture {
+		case "", "off", "always":
+		default:
+			return fmt.Errorf("server[%d] '%s': console.capture must be off or always, not %q", i, server.ID, server.Console.Capture)
 		}
 
 		if !server.HasBMC() && len(server.PDUOutlets) == 0 {

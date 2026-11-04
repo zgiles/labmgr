@@ -230,7 +230,18 @@ Everyone watching a server shares one BMC session. Recent output (256 KB) is rep
 
 ### `GET /servers/:id/console/log`
 
-Downloads the recent console output as text.
+Downloads the recent console output as text (in memory; since Lab Manager started).
+
+### Recordings
+
+After the operations in `console_capture.after` (default: power on, restart, graceful restart, power cycle, reinstall), Lab Manager keeps the console attached for `console_capture.minutes` (default 15) and saves the output to disk. The operation's `console_capture` field names its recording. With `console_capture.always` (or a server's `console.capture: always`) it also records continuously, one file per day.
+
+| | |
+|---|---|
+| `GET /servers/:id/console/captures` | `[{"name", "op_id", "started_at", "updated_at", "bytes", "active", "until"}]`, newest first. |
+| `GET /servers/:id/console/captures/:name` | The recording as text; `?download=1` to save it. |
+
+Recordings older than `console_capture.retain_days` (default 30) are deleted.
 
 ## Network boot
 

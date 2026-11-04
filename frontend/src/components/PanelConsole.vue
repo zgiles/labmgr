@@ -4,7 +4,10 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { openKVM } from '../actions'
-import type { Server } from '../types'
+import { api } from '../api'
+import { dateTime, relativeTime } from '../format'
+import { store } from '../store'
+import type { CaptureInfo, Server } from '../types'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ server: Server }>()
@@ -19,6 +22,25 @@ let fit: FitAddon | undefined
 let ws: WebSocket | undefined
 let observer: ResizeObserver | undefined
 let disposed = false
+
+// Recordings saved to disk around reboots
+const captures = ref<CaptureInfo[]>([])
+let capturesTimer: ReturnType<typeof setInterval> | undefined
+async function loadCaptures() {
+  try {
+    captures.value = await api.captures(props.server.id)
+  } catch {
+    // the live console still works without the list
+  }
+}
+function captureLabel(c: CaptureInfo) {
+  if (!c.op_id) return 'Continuous recording'
+  const op = store.operations[c.op_id]
+  return op ? op.label.replace(` ${props.server.name}`, '') : 'Operation'
+}
+function size(bytes: number) {
+  return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`
+}
 
 function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -106,7 +128,13 @@ onMounted(() => {
   })
 })
 
+onMounted(() => {
+  loadCaptures()
+  capturesTimer = setInterval(loadCaptures, 30_000)
+})
+
 onBeforeUnmount(() => {
+  clearInterval(capturesTimer)
   disposed = true
   observer?.disconnect()
   ws?.close()
@@ -132,8 +160,20 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div ref="host" class="term" />
+    <section v-if="captures.length" class="recordings">
+      <h3 class="section-title">Recordings</h3>
+      <ul>
+        <li v-for="c in captures.slice(0, 10)" :key="c.name">
+          <a :href="api.captureUrl(server.id, c.name)" target="_blank" rel="noopener">{{ captureLabel(c) }}</a>
+          <span class="muted num">{{ dateTime(c.started_at) }}</span>
+          <span v-if="c.active" class="badge tone-accent">Recording{{ c.until ? ` until ${new Date(c.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '' }}</span>
+          <span v-else class="faint num">{{ size(c.bytes) }} · {{ relativeTime(c.updated_at) }}</span>
+        </li>
+      </ul>
+    </section>
     <p class="hint">
-      Shared with anyone else watching {{ server.name }}. Output is kept so the log covers what scrolled past.
+      Shared with anyone else watching {{ server.name }}. Lab Manager also records the console for a while after
+      each power on, restart, power cycle, and reinstall; those recordings are listed above.
       The host must send its console to the serial port (e.g. <span class="mono">console=ttyS1,115200</span>) for anything to appear.
     </p>
   </div>
@@ -203,6 +243,20 @@ onBeforeUnmount(() => {
   border-radius: var(--r-md);
   background: var(--term-bg);
   overflow: hidden;
+}
+.recordings ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.recordings li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
 }
 .hint {
   font-size: 12.5px;

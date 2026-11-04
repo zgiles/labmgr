@@ -22,6 +22,7 @@ servers:
       command: "console com2"
       # ssh_port: 22
       # web_url: "https://192.168.1.101"   # link for the BMC's own graphical console
+      # capture: "off"                      # or "always"; overrides console_capture below
     metadata:
       hostname: "lab-server-01"
       role: "compute"              # Used for filtering/automation
@@ -93,6 +94,15 @@ pdus:
     type: "legacy"                # Non-APC PDUs use HTTP
 
 # Power operation timing delays (seconds)
+# Console recording (optional; these are the defaults). After these operations,
+# Lab Manager keeps the serial console attached and saves its output, linked from
+# the operation, so boots and installs leave a log even if nobody was watching.
+console_capture:
+  after: [power_on, restart, graceful_restart, power_cycle, reinstall]
+  minutes: 15
+  always: false        # record every server all the time (holds the BMC's serial session)
+  retain_days: 30
+
 delays:
   pdu_to_power_on_seconds: 120   # Wait from PDU power-on to IPMI power-on
   power_off_to_pdu_seconds: 10   # Wait from IPMI power-off to PDU power-off  

@@ -43,6 +43,14 @@ type ConsoleHub struct {
 	sessions map[string]*consoleSession
 	logs     map[string]*ring  // survives sessions
 	commands map[string]string // detected attach command per server
+
+	// Recording to disk (console_capture.go)
+	dir      string                    // where recordings go; empty disables recording
+	state    *StateStore               // to skip dark BMCs; may be nil
+	captures map[string][]*captureFile // server -> open recordings
+	holders  map[string]bool           // server -> a goroutine is keeping its session up
+	tick     time.Duration             // holder loop interval
+	retry    time.Duration             // wait between attempts to reach a dark BMC
 }
 
 func NewConsoleHub(config *ConfigStore, hw Hardware) *ConsoleHub {
@@ -54,6 +62,10 @@ func NewConsoleHub(config *ConfigStore, hw Hardware) *ConsoleHub {
 		sessions: make(map[string]*consoleSession),
 		logs:     make(map[string]*ring),
 		commands: make(map[string]string),
+		captures: make(map[string][]*captureFile),
+		holders:  make(map[string]bool),
+		tick:     5 * time.Second,
+		retry:    15 * time.Second,
 	}
 }
 
@@ -78,33 +90,9 @@ type consoleViewer struct {
 
 // Attach joins (or starts) the server's console session and returns the backlog to replay
 func (h *ConsoleHub) Attach(ctx context.Context, serverID string, cols, rows int) (*consoleSession, *consoleViewer, []byte, error) {
-	server := h.config.Get().Server(serverID)
-	if server == nil {
-		return nil, nil, nil, notFound("server %s not found", serverID)
-	}
-	if !server.HasBMC() {
-		return nil, nil, nil, badRequest("%s has no BMC, so there's no serial console", server.Name)
-	}
-
-	h.mu.Lock()
-	s, ok := h.sessions[serverID]
-	if !ok {
-		s = &consoleSession{hub: h, serverID: serverID, ready: make(chan struct{}), viewers: make(map[*consoleViewer]struct{})}
-		h.sessions[serverID] = s
-		if h.logs[serverID] == nil {
-			h.logs[serverID] = newRing(consoleScrollback)
-		}
-		go s.start(server, cols, rows)
-	}
-	h.mu.Unlock()
-
-	select {
-	case <-s.ready:
-	case <-ctx.Done():
-		return nil, nil, nil, ctx.Err()
-	}
-	if s.err != nil {
-		return nil, nil, nil, s.err
+	s, err := h.session(ctx, serverID, cols, rows)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	v := &consoleViewer{out: make(chan []byte, 256)}
@@ -122,6 +110,39 @@ func (h *ConsoleHub) Attach(ctx context.Context, serverID string, cols, rows int
 		s.conn.Resize(cols, rows) // first viewer sets the size
 	}
 	return s, v, h.Log(serverID), nil
+}
+
+// session returns the server's live console session, starting one if needed
+func (h *ConsoleHub) session(ctx context.Context, serverID string, cols, rows int) (*consoleSession, error) {
+	server := h.config.Get().Server(serverID)
+	if server == nil {
+		return nil, notFound("server %s not found", serverID)
+	}
+	if !server.HasBMC() {
+		return nil, badRequest("%s has no BMC, so there's no serial console", server.Name)
+	}
+
+	h.mu.Lock()
+	s, ok := h.sessions[serverID]
+	if !ok {
+		s = &consoleSession{hub: h, serverID: serverID, ready: make(chan struct{}), viewers: make(map[*consoleViewer]struct{})}
+		h.sessions[serverID] = s
+		if h.logs[serverID] == nil {
+			h.logs[serverID] = newRing(consoleScrollback)
+		}
+		go s.start(server, cols, rows)
+	}
+	h.mu.Unlock()
+
+	select {
+	case <-s.ready:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s, nil
 }
 
 // Log returns the server's recent console output
@@ -201,6 +222,7 @@ func (s *consoleSession) readLoop() {
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
 			scrollback.Write(chunk)
+			h.record(s.serverID, chunk)
 			s.mu.Lock()
 			for v := range s.viewers {
 				select {
@@ -243,7 +265,22 @@ func (s *consoleSession) Detach(v *consoleViewer) {
 		close(v.out)
 	}
 	if len(s.viewers) == 0 && !s.closed && s.idle == nil {
-		s.idle = time.AfterFunc(s.hub.idle, func() { s.shutdown("idle") })
+		s.idle = time.AfterFunc(s.hub.idle, func() {
+			// A recording keeps the session; its holder closes it when the recording ends
+			if !s.hub.recording(s.serverID) {
+				s.shutdownIfUnwatched("idle")
+			}
+		})
+	}
+}
+
+// shutdownIfUnwatched closes the session unless someone is viewing it
+func (s *consoleSession) shutdownIfUnwatched(reason string) {
+	s.mu.Lock()
+	watched := s.closed || len(s.viewers) > 0
+	s.mu.Unlock()
+	if !watched {
+		s.shutdown(reason)
 	}
 }
 

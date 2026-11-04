@@ -134,3 +134,22 @@ func (a *App) v2KVM(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, launch)
 }
+
+// v2ConsoleCaptures lists a server's console recordings, newest first
+func (a *App) v2ConsoleCaptures(c *gin.Context) {
+	c.JSON(http.StatusOK, a.consoles.Captures(c.Param("id")))
+}
+
+// v2ConsoleCapture serves one recording as text (add ?download=1 to save it)
+func (a *App) v2ConsoleCapture(c *gin.Context) {
+	path, ok := a.consoles.CapturePath(c.Param("id"), c.Param("name"))
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no such recording"})
+		return
+	}
+	if c.Query("download") != "" {
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s"`, c.Param("id"), c.Param("name")))
+	}
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.File(path)
+}

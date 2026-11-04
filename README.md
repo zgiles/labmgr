@@ -19,6 +19,7 @@ Lab Manager controls and watches the physical servers in a lab: power through ea
 
 ### Console and diagnostics
 - **Serial console in the browser**: Lab Manager logs in to the BMC over SSH and attaches to the host's serial port (`console com2` on iDRAC, `console 1` on XCC, configurable). Viewers share one session; recent output is kept and downloadable.
+- **Console recordings**: after a power on, restart, power cycle, or reinstall, Lab Manager keeps the serial console attached for 15 minutes and saves what it prints, linked from that operation, so a boot or an install leaves a log even if nobody watched. Which operations and how long are configurable; continuous recording is available but off by default.
 - **Graphical console**: a link to the BMC's own web KVM.
 - **Hardware details and BMC event log** (model, serial, BIOS, health; watchdog resets, PSU faults, PCIe errors).
 
@@ -84,6 +85,7 @@ servers:
       - "pdu1:2"
     console:                    # optional
       command: "console com2"   # typed at the BMC prompt; detected from the vendor if omitted
+      capture: off              # or "always"; overrides console_capture for this server
       ssh_port: 22
       web_url: "https://192.168.1.100"
     metadata:
@@ -99,12 +101,22 @@ pdus:
     snmp_community: "private"
     snmp_version: "v2c"         # v1 or v2c
 
+console_capture:               # optional; these are the defaults
+  after: [power_on, restart, graceful_restart, power_cycle, reinstall]
+  minutes: 15                   # record this long after the operation starts
+  always: false                 # record every server continuously (one file per day)
+  retain_days: 30
+
 delays:
   pdu_to_power_on_seconds: 10   # after outlets come on, before waiting for the BMC
   power_off_to_pdu_seconds: 30  # after the system is off, before cutting outlets
   between_ipmi_seconds: 2       # power cycle pauses twice this between off and on
   between_pdu_seconds: 3        # between consecutive outlet switches (minimum 3)
 ```
+
+Console recordings go in a `console/` directory next to the database (e.g. `config/console/<server>/`).
+
+Continuous recording holds each BMC's serial session open all the time, so nothing else (`ipmitool sol`, someone on the BMC) can use it while it runs; the per-operation recordings release it when they finish.
 
 A server needs a BMC (`ipmi.host`), PDU outlets, or both. Credentials never leave the server: the API strips passwords and SNMP communities.
 
