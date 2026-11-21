@@ -168,6 +168,7 @@ func (a *App) registerV2(api *gin.RouterGroup) {
 	api.GET("/servers/:id/console/captures", a.v2ConsoleCaptures)
 	api.GET("/servers/:id/console/captures/:name", a.v2ConsoleCapture)
 	api.POST("/servers/:id/kvm", a.v2KVM)
+	api.POST("/servers/:id/kvm/token", a.v2KVMToken)
 
 	api.POST("/refresh", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)

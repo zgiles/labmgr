@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -128,6 +129,12 @@ func (a *App) v2KVM(c *gin.Context) {
 	launch, err := bmc.KVM(ctx)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	if launch.Kind == "xcc" {
+		// Lab Manager hosts the XCC viewer; the page records the event when it gets its token
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, KVMLaunch{URL: "/kvm/" + url.PathEscape(c.Param("id")) + "/", Kind: "direct"})
 		return
 	}
 	a.recordEvent(&Event{ServerID: c.Param("id"), Kind: "console", Message: "Opened the graphical console", Actor: requester(c, ""), Level: "info"})

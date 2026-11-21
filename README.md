@@ -20,7 +20,7 @@ Lab Manager controls and watches the physical servers in a lab: power through ea
 ### Console and diagnostics
 - **Serial console in the browser**: Lab Manager logs in to the BMC over SSH and attaches to the host's serial port (`console com2` on iDRAC, `console 1` on XCC, configurable). Viewers share one session; recent output is kept and downloadable.
 - **Console recordings**: after a power on, restart, power cycle, or reinstall, Lab Manager keeps the serial console attached for 15 minutes and saves what it prints, linked from that operation, so a boot or an install leaves a log even if nobody watched. Which operations and how long are configurable; continuous recording is available but off by default.
-- **Graphical console**: a link to the BMC's own web KVM.
+- **Graphical console (KVM) with no BMC login**: on Dell iDRAC9 Lab Manager opens the iDRAC's virtual console with a one-time login; on Lenovo XCC it hosts the XCC's own viewer, logged in with a one-time token, and relays it, so the browser only talks to Lab Manager. Your BMC password never reaches the browser. Other BMCs open their web UI.
 - **Hardware details and BMC event log** (model, serial, BIOS, health; watchdog resets, PSU faults, PCIe errors).
 
 ### Interface

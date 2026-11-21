@@ -150,6 +150,9 @@ func (a *App) router() http.Handler {
 	v2.Use(a.resolveServerParam())
 	a.registerV2(v2)
 
+	r.GET("/kvm/:id/", a.kvmPage)
+	r.GET("/kvm/:id/sdk/:file", a.kvmSDK)
+	r.GET("/kvm/:id/ws/*rest", a.kvmRelay)
 	r.GET("/boot.ipxe", serveBootstrap)
 	r.GET("/static/boot.ipxe", serveBootstrap)
 	r.NoRoute(func(c *gin.Context) {

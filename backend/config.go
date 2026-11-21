@@ -82,6 +82,8 @@ type ConsoleConfig struct {
 	SSHPort int `yaml:"ssh_port,omitempty" json:"ssh_port,omitempty"`
 	// WebURL overrides the link used for the BMC's own web console
 	WebURL string `yaml:"web_url,omitempty" json:"web_url,omitempty"`
+	// KVMPort overrides the Lenovo XCC remote presence port (default 3900)
+	KVMPort int `yaml:"kvm_port,omitempty" json:"kvm_port,omitempty"`
 	// Capture overrides console_capture for this server: "off" or "always"
 	Capture string `yaml:"capture,omitempty" json:"capture,omitempty"`
 }

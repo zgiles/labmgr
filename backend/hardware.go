@@ -92,6 +92,13 @@ type BMC interface {
 	Logs(ctx context.Context, limit int) ([]BMCLogEntry, error)
 	KVM(ctx context.Context) (KVMLaunch, error)
 	PowerWatts(ctx context.Context) (float64, error)
+	ConsoleToken(ctx context.Context) (ConsoleToken, error)
+}
+
+// ConsoleToken is a one-time login for a BMC's own console viewer (Lenovo XCC remote presence)
+type ConsoleToken struct {
+	User     string `json:"user"`
+	Password string `json:"password"`
 }
 
 // PDUDriver controls one PDU's outlets

@@ -168,6 +168,10 @@ func (b *fakeBMC) PowerWatts(ctx context.Context) (float64, error) {
 	return 12, nil
 }
 
+func (b *fakeBMC) ConsoleToken(ctx context.Context) (ConsoleToken, error) {
+	return ConsoleToken{User: "1234567890", Password: "0987654321"}, nil
+}
+
 func (b *fakeBMC) KVM(ctx context.Context) (KVMLaunch, error) {
 	return KVMLaunch{URL: "https://bmc.example/console?tempPassword=one-time", Kind: "direct"}, nil
 }

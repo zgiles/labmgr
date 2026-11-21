@@ -215,7 +215,11 @@ Every server's recent readings, at most 60 points each, keyed by server ID (serv
 
 ### `POST /servers/:id/kvm`
 
-`{"url": "...", "kind": "direct" | "login", "note": "..."}`. On Dell iDRAC9 (Enterprise license) the URL opens the HTML5 virtual console directly with a one-time login from `GetKVMSession`; other BMCs get their web UI. The URL may carry a one-time credential: the response is `no-store` and it is never logged.
+`{"url": "...", "kind": "direct" | "login", "note": "..."}`. Open the URL in a new tab.
+
+- **Dell iDRAC9** (Enterprise license): the iDRAC's HTML5 virtual console, with a one-time login from `GetKVMSession` in the URL. The response is `no-store` and the URL is never logged.
+- **Lenovo XCC** (Advanced/Enterprise): `/kvm/<id>/`, a page Lab Manager serves that runs the XCC's own viewer. The page fetches a one-time login from `POST /servers/:id/kvm/token` (from the XCC's `GetRemoteConsoleToken`; `no-store`, never logged); the viewer's scripts come through `/kvm/<id>/sdk/` and its connections through a WebSocket relay at `/kvm/<id>/ws/` to the XCC's remote presence port (3900, or `console.kvm_port`). The browser never talks to the XCC directly, and the relay's link to the XCC is TLS. Add `?debug=1` to the page for the viewer's own log in the browser console.
+- **Others:** the BMC's web UI (`kind: "login"`).
 
 ## Serial console
 

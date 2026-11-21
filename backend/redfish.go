@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/stmcginnis/gofish"
 	"github.com/stmcginnis/gofish/schemas"
@@ -316,6 +321,11 @@ func (b *redfishBMC) KVM(ctx context.Context) (KVMLaunch, error) {
 	launch := KVMLaunch{URL: base + "/", Kind: "login", Note: "Log in to the BMC, then open its remote console."}
 
 	err := b.withSystem(ctx, func(c *gofish.APIClient, system *schemas.ComputerSystem) error {
+		if strings.Contains(strings.ToLower(system.Manufacturer), "lenovo") {
+			// Lab Manager hosts the XCC's own viewer (kvm_xcc.go); the caller fills in the URL
+			launch = KVMLaunch{Kind: "xcc"}
+			return nil
+		}
 		if !strings.Contains(strings.ToLower(system.Manufacturer), "dell") {
 			return nil
 		}
@@ -379,4 +389,57 @@ func (b *redfishBMC) PowerWatts(ctx context.Context) (float64, error) {
 		err = fmt.Errorf("BMC doesn't report power draw")
 	}
 	return watts, err
+}
+
+// ConsoleToken asks a Lenovo XCC for a one-time remote presence login. The XCC answers
+// with "user=<id>&password=<secret>", usable once by its RPViewer.
+func (b *redfishBMC) ConsoleToken(ctx context.Context) (ConsoleToken, error) {
+	var token ConsoleToken
+	c, err := b.connect(ctx)
+	if err != nil {
+		return token, err
+	}
+	defer c.Logout()
+	resp, err := c.Post("/redfish/v1/Managers/1/Oem/Lenovo/RemoteControl/Actions/LenovoRemoteControlService.GetRemoteConsoleToken", map[string]any{})
+	if err != nil {
+		return token, fmt.Errorf("this BMC can't issue a console token: %w", err)
+	}
+	defer schemas.DeferredCleanupHTTPResponse(resp)
+	var body struct{ Token string }
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return token, err
+	}
+	fields, err := url.ParseQuery(body.Token)
+	if err != nil || fields.Get("user") == "" || fields.Get("password") == "" {
+		return token, fmt.Errorf("unexpected console token format from the BMC")
+	}
+	return ConsoleToken{User: fields.Get("user"), Password: fields.Get("password")}, nil
+}
+
+// fetchStatic GETs a file from the BMC's web server (the XCC viewer's scripts are public)
+func (b *redfishBMC) fetchStatic(ctx context.Context, path string) ([]byte, string, error) {
+	base := b.config.Host
+	if !strings.Contains(base, "://") {
+		base = "https://" + base
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(base, "/")+path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := insecureHTTP.Do(req)
+	if err != nil {
+		return nil, "", friendlyError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("BMC returned %d for %s", resp.StatusCode, path)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	return data, resp.Header.Get("Content-Type"), err
+}
+
+// insecureHTTP talks to BMCs, which use self-signed certificates
+var insecureHTTP = &http.Client{
+	Timeout:   30 * time.Second,
+	Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
 }
