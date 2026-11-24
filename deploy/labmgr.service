@@ -1,6 +1,6 @@
 # Lab Manager systemd unit.
 #
-# Expects the layout from DEPLOYMENT.md:
+# Expects the layout from docs/deployment.md:
 #   /opt/labmgr/labmgr                   the binary (a copy on local disk, not a build output
 #                                        on a shared filesystem; rebuilding that file under a
 #                                        running process kills it)
@@ -17,7 +17,7 @@
 
 [Unit]
 Description=Lab Manager (BMC/PDU power, network boot, consoles)
-Documentation=file:///opt/labmgr/README.md
+Documentation=https://github.com/zgiles/labmgr/blob/master/docs/deployment.md
 After=network-online.target
 Wants=network-online.target
 

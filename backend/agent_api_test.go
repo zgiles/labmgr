@@ -22,13 +22,13 @@ func TestServersResolveByNameOrHostname(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/servers/node999/bmc", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v2/servers/nosuchserver/bmc", nil))
 	var body struct {
 		Error   string   `json:"error"`
 		Servers []string `json:"servers"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &body)
-	if rec.Code != http.StatusNotFound || len(body.Servers) != 3 || !strings.Contains(body.Error, "node999") {
+	if rec.Code != http.StatusNotFound || len(body.Servers) != 3 || !strings.Contains(body.Error, "nosuchserver") {
 		t.Errorf("unknown server: %d %s", rec.Code, rec.Body)
 	}
 

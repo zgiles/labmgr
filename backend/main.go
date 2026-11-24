@@ -37,12 +37,26 @@ type App struct {
 
 func main() {
 	var listenAddr, dataPath string
+	var demo bool
 	flag.StringVar(&configPath, "config", "config/servers.yaml", "Path to configuration file")
 	flag.StringVar(&listenAddr, "listen", "0.0.0.0:8098", "Address to listen on")
 	flag.StringVar(&dataPath, "data", "", "Operations/activity database (default: next to the config, e.g. config/servers.db)")
 	flag.StringVar(&osDataFile, "os-data", "", "Boot images and assignments file (default: next to the config, e.g. config/servers.os.json)")
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug logging")
+	flag.BoolVar(&demo, "demo", false, "Run a simulated lab to try Lab Manager without hardware (ignores -config; nothing real is touched)")
 	flag.Parse()
+
+	var demoHW *demoLab
+	if demo {
+		path, lab, err := setupDemo()
+		if err != nil {
+			log.Fatalf("Couldn't set up the demo: %v", err)
+		}
+		configPath, demoHW = path, lab
+		osDataFile = ""
+		dataPath = ""
+		log.Printf("Demo mode: a simulated lab; no real hardware is touched (data in %s)", filepath.Dir(path))
+	}
 
 	if dataPath == "" {
 		dataPath = strings.TrimSuffix(configPath, filepath.Ext(configPath)) + ".db"
@@ -75,7 +89,11 @@ func main() {
 		hub.Publish("config", nil)
 	})
 
-	hw := newRealHardware()
+	var hw Hardware = newRealHardware()
+	if demoHW != nil {
+		hw = demoHW
+		demoHW.seedPowerHistory(store)
+	}
 	poller := NewPoller(config, hw, state)
 	poller.store = store
 	engine := NewEngine(config, hw, state, poller, store, hub, osManager)
@@ -86,6 +104,9 @@ func main() {
 	consoles := NewConsoleHub(config, hw)
 	consoles.dir = filepath.Join(filepath.Dir(dataPath), "console")
 	consoles.state = state
+	if demoHW != nil {
+		consoles.dial = dialDemoConsole
+	}
 	engine.onStart = consoles.captureForOperation
 
 	app := &App{config: config, state: state, poller: poller, engine: engine, store: store, hub: hub, hw: hw, consoles: consoles}

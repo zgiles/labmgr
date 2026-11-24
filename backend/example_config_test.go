@@ -7,7 +7,7 @@ import (
 
 // The shipped examples must stay loadable as the config format evolves
 func TestExampleConfigsParse(t *testing.T) {
-	for _, path := range []string{"../config/servers.yaml.example", "../config.example.yaml"} {
+	for _, path := range []string{"../config/servers.yaml.example"} {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

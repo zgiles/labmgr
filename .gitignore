@@ -138,3 +138,5 @@ jspm_packages/
 *.db
 *.sqlite
 *.sqlite3
+# Site-specific notes and data kept out of the repo
+local/

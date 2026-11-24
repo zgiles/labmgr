@@ -132,6 +132,7 @@ const severityTone = (s: string) => (s === 'OK' ? '' : s === 'Warning' ? 'tone-w
 <style scoped>
 .stack {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 32px;
 }
 .ops,

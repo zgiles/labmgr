@@ -226,3 +226,17 @@ func (s *Store) PrunePower() error {
 		return nil
 	})
 }
+
+// AppendPowerBatch records many readings for a server in one transaction
+func (s *Store) AppendPowerBatch(serverID string, samples []PowerSample) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketPower)
+		for _, sample := range samples {
+			t := time.UnixMilli(int64(sample[0]))
+			if err := b.Put(powerKey(serverID, t), []byte(strconv.FormatFloat(sample[1], 'f', 1, 64))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

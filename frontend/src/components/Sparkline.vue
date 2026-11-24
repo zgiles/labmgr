@@ -19,8 +19,8 @@ const path = computed(() => {
     lo = Math.min(lo, w)
     hi = Math.max(hi, w)
   }
-  // Keep flat-ish lines flat instead of exaggerating a few watts of noise
-  const span = Math.max(hi - lo, hi * 0.1, 1)
+  // Keep flat-ish lines flat: a few watts of standby wobble shouldn't fill the sparkline
+  const span = Math.max(hi - lo, hi * 0.15, 20)
   const mid = (hi + lo) / 2
   const pad = 2
   const x = (t: number) => pad + ((t - t0) / Math.max(t1 - t0, 1)) * (props.width - pad * 2)

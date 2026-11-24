@@ -42,7 +42,6 @@ buildGoModule {
       (lib.fileset.difference ../backend (lib.fileset.maybeMissing ../backend/static))
       # The tests check that the shipped example configs still parse
       ../config/servers.yaml.example
-      ../config.example.yaml
     ];
   };
   modRoot = "backend";

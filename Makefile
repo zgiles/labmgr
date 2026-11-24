@@ -14,7 +14,7 @@ build-backend: build-frontend
 	cd backend && CGO_ENABLED=0 go build -ldflags="-w -s" -o ../labmgr .
 
 # Release binary: a new, versioned file every time, never overwriting one that may be
-# running. /srv is shared over NFS, so a host running a binary from this tree would
+# running. If this tree is on a shared filesystem (NFS) and another host runs a binary from it, it would
 # crash (SIGBUS) if the file were rewritten under it.
 RELEASE := releases/labmgr-$(shell git describe --always --dirty)-linux-amd64
 

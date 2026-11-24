@@ -124,7 +124,7 @@ func TestOperationsStartRecordings(t *testing.T) {
 		t.Fatal("restart didn't start a recording")
 	}
 	eventually(t, "the console session", dialed(dialer))
-	dialer.last().toViewer.Write([]byte("Ubuntu 24.04 node login:\r\n"))
+	dialer.last().toViewer.Write([]byte("Ubuntu 24.04 node01 login:\r\n"))
 	eventually(t, "output in the recording", func() bool {
 		path, ok := app.consoles.CapturePath("bmconly", op.ConsoleCapture)
 		data, _ := os.ReadFile(path)

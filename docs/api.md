@@ -32,7 +32,7 @@ All servers with their live state. Credentials are never included.
     "name": "node01",
     "description": "Compute",
     "metadata": {"role": "compute", "hostname": "node01", "mac": "aa:bb:cc:dd:ee:01"},
-    "bmc_host": "192.0.2.111",
+    "bmc_host": "192.0.2.11",
     "has_bmc": true,
     "outlets": ["pdu-01:21"],
     "mac": "aa:bb:cc:dd:ee:01",
@@ -44,12 +44,12 @@ All servers with their live state. Credentials are never included.
       "pdu": "ok",
       "outlets": [{"ref": "pdu-01:21", "state": "on"}],
       "operation": null,
-      "last_boot": {"at": "2026-10-14T21:10:03Z", "client_ip": "192.0.2.111", "source": "local"},
+      "last_boot": {"at": "2026-10-14T21:10:03Z", "client_ip": "192.0.2.11", "source": "local"},
       "bmc_checked_at": "2026-10-14T22:01:17Z",
       "pdu_checked_at": "2026-10-14T22:01:15Z"
     },
     "os": {"template_id": "debian-installer", "template_name": "Debian installer", "boot_method": "template", "one_shot": true, "then_template": "local-disk"},
-    "console": {"web_url": "https://192.0.2.111", "serial": true}
+    "console": {"web_url": "https://192.0.2.11", "serial": true}
   }
 ]
 ```
@@ -188,7 +188,7 @@ Reads the BMC live (a few seconds):
 
 ```json
 {
-  "info": {"manufacturer": "Dell Inc.", "model": "PowerEdge R740xd", "serial_number": "ABC1234",
+  "info": {"manufacturer": "Dell Inc.", "model": "PowerEdge R740", "serial_number": "ABC1234",
            "bios_version": "2.26.1", "health": "Critical", "bmc_model": "14G Monolithic",
            "bmc_firmware": "7.00.00.184", "graphical_kvm": true},
   "boot": {"target": "none", "enabled": "Disabled", "mode": "UEFI"}

@@ -1,0 +1,49 @@
+name: Release
+
+# Push a tag like v2.0.0 to build binaries and publish a GitHub release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Build the web UI
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Test
+        run: |
+          rm -rf backend/static && cp -r frontend/dist backend/static
+          cd backend && go test ./...
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            (cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -trimpath -ldflags="-s -w" -o "../dist/labmgr-${GITHUB_REF_NAME}-linux-${arch}" .)
+          done
+          cd dist && sha256sum labmgr-* > SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(awk -v v="${GITHUB_REF_NAME#v}" '$0 ~ "^## " v {p=1; next} /^## / && p {exit} p' CHANGELOG.md)
+          gh release create "$GITHUB_REF_NAME" dist/* --title "Lab Manager ${GITHUB_REF_NAME}" --notes "${notes:-See CHANGELOG.md}"
