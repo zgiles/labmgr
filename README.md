@@ -26,8 +26,8 @@ monitoring. It's a single Go binary with the web UI built in.
   <img src="docs/images/console.png" alt="The serial console" width="49%">
 </p>
 
-BMCs are reached over Redfish (tested on Dell iDRAC9 and Lenovo XCC). PDUs can be APC over
-SNMP or simple HTTP PDUs.
+BMCs are reached over Redfish and SSH (tested on Dell iDRAC9 and iDRAC8, and Lenovo XCC);
+PDUs over SNMP (APC) or HTTP. See [Hardware and protocols](docs/hardware.md).
 
 ## Try it
 
@@ -53,7 +53,7 @@ $EDITOR config/servers.yaml          # your servers, their BMCs, your PDUs
 ## Documentation
 
 [User guide](docs/guide.md) · [Configuration](docs/configuration.md) ·
-[Network boot](docs/network-boot.md) · [Deployment](docs/deployment.md) (systemd, NixOS,
+[Network boot](docs/network-boot.md) · [Hardware](docs/hardware.md) · [Deployment](docs/deployment.md) (systemd, NixOS,
 proxies, security) · [API](docs/api.md) · [Development](docs/development.md) ·
 [Changelog](CHANGELOG.md)
 

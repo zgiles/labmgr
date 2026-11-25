@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,28 +18,10 @@ import (
 	"github.com/stmcginnis/gofish/schemas"
 )
 
-// redfishBMC talks to a BMC over Redfish. It uses HTTP basic auth rather than
-// sessions so frequent polling doesn't exhaust the BMC's session slots.
+// redfishBMC talks to a BMC over Redfish, through a login session shared by every
+// request to that BMC (redfish_session.go).
 type redfishBMC struct {
 	config IPMIConfig
-}
-
-func (b *redfishBMC) connect(ctx context.Context) (*gofish.APIClient, error) {
-	endpoint := b.config.Host
-	if !strings.Contains(endpoint, "://") {
-		endpoint = "https://" + endpoint
-	}
-	c, err := gofish.ConnectContext(ctx, gofish.ClientConfig{
-		Endpoint:  endpoint,
-		Username:  b.config.Username,
-		Password:  b.config.Password,
-		Insecure:  true,
-		BasicAuth: true,
-	})
-	if err != nil {
-		return nil, friendlyError(err)
-	}
-	return c, nil
 }
 
 // friendlyError turns common transport and auth failures into short, plain explanations
@@ -62,21 +45,15 @@ func friendlyError(err error) error {
 	return err
 }
 
+// withSystem runs fn against the BMC's computer system
 func (b *redfishBMC) withSystem(ctx context.Context, fn func(*gofish.APIClient, *schemas.ComputerSystem) error) error {
-	c, err := b.connect(ctx)
-	if err != nil {
-		return err
-	}
-	defer c.Logout()
-
-	systems, err := c.Service.Systems()
-	if err != nil {
-		return fmt.Errorf("list systems: %w", err)
-	}
-	if len(systems) == 0 {
-		return fmt.Errorf("BMC reports no systems")
-	}
-	return fn(c, systems[0])
+	return b.do(ctx, func(c *gofish.APIClient, cn *bmcConn) error {
+		system, err := cn.system(c)
+		if err != nil {
+			return fmt.Errorf("read the system: %w", err)
+		}
+		return fn(c, system)
+	})
 }
 
 func (b *redfishBMC) PowerState(ctx context.Context) (PowerState, error) {
@@ -170,9 +147,9 @@ func (b *redfishBMC) Info(ctx context.Context) (BMCInfo, error) {
 		info.SerialIPMI = system.SerialConsole.IPMI.ServiceEnabled
 		info.GraphicalKVM = system.GraphicalConsole.ServiceEnabled
 
-		if managers, err := c.Service.Managers(); err == nil && len(managers) > 0 {
-			info.BMCModel = managers[0].Model
-			info.BMCFirmware = managers[0].FirmwareVersion
+		if manager, err := b.conn().manager(c); err == nil {
+			info.BMCModel = manager.Model
+			info.BMCFirmware = manager.FirmwareVersion
 		}
 		return nil
 	})
@@ -184,8 +161,8 @@ func (b *redfishBMC) Logs(ctx context.Context, limit int) ([]BMCLogEntry, error)
 	entries := []BMCLogEntry{}
 	err := b.withSystem(ctx, func(c *gofish.APIClient, system *schemas.ComputerSystem) error {
 		var services []*schemas.LogService
-		if managers, err := c.Service.Managers(); err == nil && len(managers) > 0 {
-			if s, err := managers[0].LogServices(); err == nil {
+		if manager, err := b.conn().manager(c); err == nil {
+			if s, err := manager.LogServices(); err == nil {
 				services = append(services, s...)
 			}
 		}
@@ -203,6 +180,12 @@ func (b *redfishBMC) Logs(ctx context.Context, limit int) ([]BMCLogEntry, error)
 				continue
 			}
 			logEntries, err := fetchLogEntries(ctx, c, service.ODataID+"/Entries", 200)
+			if answeredWithError(err) {
+				// Older firmware (iDRAC8) keeps the entries elsewhere and links to them
+				if uri := logEntriesLink(c, service.ODataID); uri != "" {
+					logEntries, err = fetchLogEntries(ctx, c, uri, 200)
+				}
+			}
 			if err != nil {
 				continue
 			}
@@ -226,7 +209,15 @@ func (b *redfishBMC) Logs(ctx context.Context, limit int) ([]BMCLogEntry, error)
 		}
 	}
 	entries = unique
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Created > entries[j].Created })
+	// Newest first. Compare times, not strings: one BMC can stamp its logs with different offsets.
+	sort.SliceStable(entries, func(i, j int) bool {
+		ti, erri := time.Parse(time.RFC3339, entries[i].Created)
+		tj, errj := time.Parse(time.RFC3339, entries[j].Created)
+		if erri != nil || errj != nil {
+			return entries[i].Created > entries[j].Created
+		}
+		return ti.After(tj)
+	})
 	if limit > 0 && len(entries) > limit {
 		entries = entries[:limit]
 	}
@@ -253,6 +244,24 @@ type rawLogEntry struct {
 // fetchLogEntries reads up to top entries of a log collection. Some BMCs (iDRAC) return
 // entries inline; others (XCC) return only links, which gofish would fetch one by one
 // serially. Links are fetched here a few at a time instead.
+// logEntriesLink reads where a log service keeps its entries
+func logEntriesLink(c *gofish.APIClient, serviceURI string) string {
+	resp, err := c.Get(serviceURI)
+	if err != nil {
+		return ""
+	}
+	defer schemas.DeferredCleanupHTTPResponse(resp)
+	var service struct {
+		Entries struct {
+			ODataID string `json:"@odata.id"`
+		}
+	}
+	if json.NewDecoder(resp.Body).Decode(&service) != nil {
+		return ""
+	}
+	return service.Entries.ODataID
+}
+
 func fetchLogEntries(ctx context.Context, c *gofish.APIClient, uri string, top int) ([]BMCLogEntry, error) {
 	getJSON := func(url string, into any) error {
 		resp, err := c.Get(url)
@@ -267,7 +276,14 @@ func fetchLogEntries(ctx context.Context, c *gofish.APIClient, uri string, top i
 		Members []rawLogEntry `json:"Members"`
 	}
 	if err := getJSON(fmt.Sprintf("%s?$top=%d", uri, top), &collection); err != nil {
-		return nil, err
+		// iDRAC8 rejects a $top larger than the log; ask for the whole log instead
+		var e *schemas.Error
+		if !errors.As(err, &e) || e.HTTPReturnedStatusCode != http.StatusBadRequest {
+			return nil, err
+		}
+		if err := getJSON(uri, &collection); err != nil {
+			return nil, err
+		}
 	}
 	members := collection.Members
 	if len(members) > top {
@@ -395,25 +411,24 @@ func (b *redfishBMC) PowerWatts(ctx context.Context) (float64, error) {
 // with "user=<id>&password=<secret>", usable once by its RPViewer.
 func (b *redfishBMC) ConsoleToken(ctx context.Context) (ConsoleToken, error) {
 	var token ConsoleToken
-	c, err := b.connect(ctx)
-	if err != nil {
-		return token, err
-	}
-	defer c.Logout()
-	resp, err := c.Post("/redfish/v1/Managers/1/Oem/Lenovo/RemoteControl/Actions/LenovoRemoteControlService.GetRemoteConsoleToken", map[string]any{})
-	if err != nil {
-		return token, fmt.Errorf("this BMC can't issue a console token: %w", err)
-	}
-	defer schemas.DeferredCleanupHTTPResponse(resp)
-	var body struct{ Token string }
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return token, err
-	}
-	fields, err := url.ParseQuery(body.Token)
-	if err != nil || fields.Get("user") == "" || fields.Get("password") == "" {
-		return token, fmt.Errorf("unexpected console token format from the BMC")
-	}
-	return ConsoleToken{User: fields.Get("user"), Password: fields.Get("password")}, nil
+	err := b.do(ctx, func(c *gofish.APIClient, _ *bmcConn) error {
+		resp, err := c.Post("/redfish/v1/Managers/1/Oem/Lenovo/RemoteControl/Actions/LenovoRemoteControlService.GetRemoteConsoleToken", map[string]any{})
+		if err != nil {
+			return fmt.Errorf("this BMC can't issue a console token: %w", err)
+		}
+		defer schemas.DeferredCleanupHTTPResponse(resp)
+		var body struct{ Token string }
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return err
+		}
+		fields, err := url.ParseQuery(body.Token)
+		if err != nil || fields.Get("user") == "" || fields.Get("password") == "" {
+			return fmt.Errorf("unexpected console token format from the BMC")
+		}
+		token = ConsoleToken{User: fields.Get("user"), Password: fields.Get("password")}
+		return nil
+	})
+	return token, err
 }
 
 // fetchStatic GETs a file from the BMC's web server (the XCC viewer's scripts are public)

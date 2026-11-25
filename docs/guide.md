@@ -200,7 +200,9 @@ script sends one.
 ## Troubleshooting
 
 **A server shows Unreachable.** Lab Manager can't reach the BMC over HTTPS. Hover the
-state, or open the panel, for the reason. If it's a login error, check the credentials in
+state, or open the panel, for the reason. "No route to host" when other machines can
+reach the BMC usually means Lab Manager runs on that server, or in a VM on it, and the
+BMC shares the host's network port; see [Network caveats](hardware.md#network-caveats). If it's a login error, check the credentials in
 the config. If the server's outlets are off, it shows as Off instead, because a dark BMC is
 expected then.
 

@@ -135,6 +135,7 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	server.Shutdown(shutdownCtx)
+	closeBMCSessions()
 }
 
 // watchConfig reloads on SIGHUP and whenever the file changes

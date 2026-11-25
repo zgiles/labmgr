@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- One Redfish login session per BMC, reused for every request, instead of sending the
+  password with each one. Dell iDRAC8, which checks a password slowly, goes from
+  timing out to answering in about a second. The session is logged out when unused and
+  re-created if the BMC drops it.
+- Each BMC's system and manager addresses are remembered, so a status check is one
+  request.
+- Event logs on iDRAC8, which keeps its entries at a linked address and rejects a large
+  `$top`. Log entries are ordered by time across logs with different UTC offsets.
+- docs/hardware.md: which protocol is used for what (Redfish, SSH, SNMP; not IPMI), and
+  what works on each BMC.
+
 ## 2.0.0
 
 A rewrite of the engine and the interface, with consoles, network-boot workflows, and

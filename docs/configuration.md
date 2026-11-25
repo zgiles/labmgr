@@ -48,8 +48,8 @@ A server needs a BMC (`ipmi.host`), PDU outlets, or both:
 | Outlets only (switches, appliances) | outlets on | outlets off | the outlets |
 
 The `ipmi` key is named for history. Lab Manager talks to BMCs over **Redfish**
-(HTTPS). It uses HTTP basic authentication, so polling doesn't use up the BMC's session
-slots. Give it an account that can control power and use the console. On iDRAC that's
+(HTTPS) and SSH, not IPMI, using one login session per BMC (see
+[Hardware and protocols](hardware.md)). Give it an account that can control power and use the console. On iDRAC that's
 Operator or Administrator; on XCC, a role with Remote Console and Power/Restart.
 
 **`console.command`** is typed at the BMC's SSH prompt to attach to the host's serial port.

@@ -35,7 +35,7 @@ consoles, for trying the UI.
 | `config.go` | The config store: parsed once, validated, and reloaded when the file changes. |
 | `state.go`, `poller.go` | Observed state per server (BMC link, system power, PDU link, each outlet), polled on per-device schedules, faster while an operation runs. The display state (`on`, `off`, `powered`, `powering_on`, …) is derived in one place. |
 | `engine.go`, `plans.go`, `execute.go`, `reinstall.go` | Operations. Planners turn a request and the current state into steps. The engine runs them, one operation per server, with retries, cancellation, scheduling, and persistence. |
-| `hardware.go`, `redfish.go`, `pdu.go` | Drivers behind interfaces: Redfish via gofish (basic auth, so polling doesn't use up BMC sessions), APC over SNMP, and HTTP PDUs. |
+| `hardware.go`, `redfish.go`, `redfish_session.go`, `pdu.go` | Drivers behind interfaces: Redfish via gofish (one shared login session per BMC), APC over SNMP, and HTTP PDUs. |
 | `console.go`, `console_api.go`, `console_capture.go` | Shared SSH serial console sessions with scrollback, bridged to WebSockets, and the recordings. |
 | `kvm_xcc.go` | The hosted Lenovo XCC viewer and its WebSocket relay. |
 | `boot.go`, `os_manager.go`, `os_api.go` | iPXE scripts, boot images, and assignments. |
