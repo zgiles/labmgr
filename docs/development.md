@@ -1,7 +1,7 @@
 # Development
 
 You need Go 1.26+, Node.js 20.19+ or 22.12+, and make. With Nix, `nix develop` provides
-them.
+them. [Building](building.md) covers release builds, Nix, and replacing a running binary.
 
 ```bash
 make test        # Go tests with -race (against simulated hardware) and the TypeScript typecheck

@@ -3,6 +3,8 @@
 - **[User guide](guide.md)**: the servers list and server states, power operations and
   scheduling, network boot and reinstalls, consoles and recordings, power monitoring, and
   activity.
+- **[Building](building.md)**: download a release, or build with Nix (`nix build`) or
+  make (`make release`).
 - **[Configuration](configuration.md)**: `servers.yaml`, covering servers, BMCs, PDUs,
   consoles, console recording, timings, and command-line flags.
 - **[Hardware and protocols](hardware.md)**: what Lab Manager uses to talk to BMCs and

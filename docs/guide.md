@@ -3,6 +3,10 @@
 This guide walks through the web UI. Every action here is also available through the
 [API](api.md).
 
+To get Lab Manager running first: download or build it ([Building](building.md)), describe
+your servers ([Configuration](configuration.md)), and start it
+([Deployment](deployment.md)). Or run `labmgr -demo` to explore a simulated lab.
+
 - [The servers list](#the-servers-list)
 - [What each state means](#what-each-state-means)
 - [Powering servers on and off](#powering-servers-on-and-off)

@@ -38,7 +38,8 @@ PDUs over SNMP (APC) or HTTP. See [Hardware and protocols](docs/hardware.md).
 ## Install
 
 Download a Linux binary from the [releases page](https://github.com/zgiles/labmgr/releases),
-build one with `make release` (Go 1.26+, Node.js 20.19+), or use the Nix flake.
+or build one: `nix build` with Nix, or `make release` with Go 1.26+ and Node.js 20.19+.
+See [Building](docs/building.md).
 
 ```bash
 cp config/servers.yaml.example config/servers.yaml && chmod 600 config/servers.yaml
@@ -52,7 +53,7 @@ $EDITOR config/servers.yaml          # your servers, their BMCs, your PDUs
 
 ## Documentation
 
-[User guide](docs/guide.md) · [Configuration](docs/configuration.md) ·
+[User guide](docs/guide.md) · [Building](docs/building.md) · [Configuration](docs/configuration.md) ·
 [Network boot](docs/network-boot.md) · [Hardware](docs/hardware.md) · [Deployment](docs/deployment.md) (systemd, NixOS,
 proxies, security) · [API](docs/api.md) · [Development](docs/development.md) ·
 [Changelog](CHANGELOG.md)

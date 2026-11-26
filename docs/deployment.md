@@ -5,19 +5,8 @@ file, a writable directory for its database, and network access to your BMCs and
 
 ## Get the binary
 
-**Release build:** download `labmgr-<version>-linux-amd64` (or `-arm64`) from the
-[releases page](https://github.com/zgiles/labmgr/releases) and check it against
-`SHA256SUMS`.
-
-**From source** (Go 1.26+, Node.js 20.19+ or 22.12+, make):
-
-```bash
-git clone https://github.com/zgiles/labmgr.git
-cd labmgr
-make release          # → releases/labmgr-<commit>-linux-amd64
-```
-
-**With Nix:** `nix build github:zgiles/labmgr`.
+Download a release, or build one with Nix (`nix build`) or make (`make release`).
+[Building](building.md) covers all three.
 
 ## Network requirements
 
